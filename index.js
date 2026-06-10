@@ -13,6 +13,7 @@ import { generateBriefing } from "./briefing.js";
 import { getForexNews, formatNewsForPrompt } from "./news.js";
 import { getPerformanceSummary } from "./lessons.js";
 import { connectWebSocket, disconnectWebSocket } from "./tradelocker/client.js";
+import { startPolling, stopPolling, isEnabled as telegramEnabled, sendMessage, notifyScannerReport, notifyManagerReport } from "./telegram.js";
 import { REPO_ROOT } from "./repo-root.js";
 
 const entrypointPath = process.env.pm_exec_path || process.argv[1];
@@ -88,6 +89,7 @@ Follow the mandatory steps in the system prompt:
       2048
     );
     log("cron", `Scanner result: ${stripThink(content).slice(0, 200)}`);
+    if (content) notifyScannerReport(stripThink(content)).catch(() => {});
   } catch (error) {
     log("cron_error", `Scanner cycle failed: ${error.message}`);
   } finally {
@@ -131,6 +133,7 @@ Review each position:
       2048
     );
     log("cron", `Manager result: ${stripThink(content).slice(0, 200)}`);
+    if (content) notifyManagerReport(stripThink(content)).catch(() => {});
   } catch (error) {
     log("cron_error", `Manager cycle failed: ${error.message}`);
   } finally {
@@ -228,6 +231,42 @@ function refreshPrompt() {
   _ttyInterface.prompt(true);
 }
 
+async function telegramHandler(msg) {
+  const text = msg?.text?.trim();
+  if (!text) return;
+
+  if (text === "/start") {
+    await sendMessage("🤖 Spectrun AI Trader ready.\n\nCommands: /status /positions /news /config /settings /pause /resume").catch(() => {});
+    return;
+  }
+  if (text === "/status") {
+    try {
+      const account = await getAccountStatus();
+      const positions = await getOpenPositions();
+      const risk = getRiskReport(account, positions, []);
+      await sendMessage(risk).catch(() => {});
+    } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => {}); }
+    return;
+  }
+  if (text === "/positions") {
+    try {
+      const positions = await getOpenPositions();
+      if (positions.length === 0) { await sendMessage("No open positions.").catch(() => {}); return; }
+      const lines = positions.map((p, i) => `${i + 1}. ${p.symbol} ${p.type} | ${p.volume}L | P&L: $${(p.profit || 0).toFixed(2)}`);
+      await sendMessage(`📊 ${positions.length} Open\n\n${lines.join("\n")}`).catch(() => {});
+    } catch (e) { await sendMessage(`Error: ${e.message}`).catch(() => {}); }
+    return;
+  }
+  // Free-form chat via agent
+  busy = true;
+  try {
+    const { content } = await agentLoop(text, config.llm.maxSteps, [], "GENERAL", config.llm.generalModel, null, { interactive: true });
+    await sendMessage(stripThink(content)).catch(() => {});
+  } catch (e) {
+    await sendMessage(`Error: ${e.message}`).catch(() => {});
+  } finally { busy = false; }
+}
+
 if (isMain && isTTY) {
   const rl = readline.createInterface({
     input: process.stdin,
@@ -270,6 +309,11 @@ if (isMain && isTTY) {
 
   startCronJobs();
   cronStarted = true;
+
+  if (telegramEnabled()) {
+    startPolling(telegramHandler);
+    log("startup", "Telegram bot polling started");
+  }
 
   console.log(`Commands: /status /positions /scan /manage /news /briefing /config /stop\n`);
 

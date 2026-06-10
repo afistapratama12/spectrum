@@ -36,6 +36,10 @@ Strategy:
   query <filters>           Query journal (--symbol EURUSD --session London)
   resume <strategy_id>      Manually resume a paused strategy
 
+Backtest:
+  backtest <pair> <strat>   Run backtest (e.g. EURUSD london_breakout 30 0.5)
+  backtests                 List all saved backtest results
+
 Trade:
   place <symbol> <dir> <lots> <sl> <tp>   Place a trade
   close <ticket> <reason>                 Close a trade
@@ -210,6 +214,32 @@ async function main() {
       }
       case "resume": {
         const result = await executeTool("resume_strategy", { strategy_id: args[0] });
+        printJson(result);
+        break;
+      }
+      case "backtest": {
+        const [symbol, strategy, days, risk] = args;
+        const result = await executeTool("run_backtest", {
+          symbol: symbol || "EURUSD",
+          strategy: strategy || null,
+          days: parseInt(days) || 30,
+          risk_per_trade: parseFloat(risk) || 0.5,
+        });
+        console.log(`\n📊 Backtest: ${result.result.symbol} | ${result.result.strategy || "all"} | ${result.result.days}d`);
+        console.log(`Trades: ${result.result.totalTrades} | WR: ${result.result.winRate}% | PnL: $${result.result.totalPnl} (${result.result.totalPnlPct}%)`);
+        console.log(`Max DD: ${result.result.maxDrawdownPct}% | Sharpe: ${result.result.sharpeRatio} | Factor: ${result.result.profitFactor}`);
+        console.log(`Saved: ${result.savedAs}\n`);
+        if (Object.keys(result.result.byStrategy).length > 0) {
+          console.log("Per-strategy:");
+          for (const [id, s] of Object.entries(result.result.byStrategy)) {
+            console.log(`  ${id}: ${s.trades}t ${s.winRate}%WR $${s.totalPnl}`);
+          }
+          console.log();
+        }
+        break;
+      }
+      case "backtests": {
+        const result = await executeTool("list_backtests", {});
         printJson(result);
         break;
       }

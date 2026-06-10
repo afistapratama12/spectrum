@@ -12,6 +12,7 @@ import { STRATEGIES, getStrategiesByType, getStrategiesForSession, getStrategy, 
 import { recordTradeForConsistency, getConsistencyReport, checkDailyConsistency, getStrategyUsageReport } from "../consistency-tracker.js";
 import { queryJournal, getJournalAnalytics } from "../trading-journal.js";
 import { getNewsCorrelations, getHighImpactEvents } from "../news.js";
+import { runBacktest, listBacktestResults } from "../backtest/engine.js";
 import fs from "fs";
 import { repoPath } from "../repo-root.js";
 
@@ -524,6 +525,15 @@ const toolMap = {
 
   resume_strategy: async ({ strategy_id }) => {
     return resumeStrategy(strategy_id);
+  },
+
+  run_backtest: async ({ symbol = "EURUSD", strategy = null, days = 30, risk_per_trade = 0.5 } = {}) => {
+    const { result, filename } = runBacktest({ symbol, strategy, days, riskPerTrade: risk_per_trade });
+    return { result, savedAs: filename };
+  },
+
+  list_backtests: async () => {
+    return { results: listBacktestResults() };
   },
 };
 

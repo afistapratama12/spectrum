@@ -429,6 +429,45 @@ Use this if you believe the strategy is ready to trade again despite the stats.`
       },
     },
   },
+
+  // ═══════════════════════════════════════════
+  //  BACKTEST TOOLS
+  // ═══════════════════════════════════════════
+  {
+    type: "function",
+    function: {
+      name: "run_backtest",
+      description: `Run a strategy backtest on synthetic OHLCV data using the full trade simulation engine.
+Includes spread, slippage, commission, swap, equity curve, Sharpe ratio, and per-strategy breakdown.
+Use this to validate a strategy before trading it live.
+
+Parameters:
+- symbol: trading pair (default EURUSD)
+- strategy: strategy ID or null for all strategies
+- days: how many days of data (default 30)
+- risk_per_trade: risk % per trade (default 0.5)
+
+Returns full backtest report with win rate, P&L, drawdown, Sharpe, profit factor.`,
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: { type: "string", description: "Trading symbol (EURUSD, GBPUSD, etc.)" },
+          strategy: { type: "string", description: "Strategy ID, or omit for all strategies" },
+          days: { type: "number", description: "Days of historical data (default 30)" },
+          risk_per_trade: { type: "number", description: "Risk % per trade (default 0.5)" },
+        },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_backtests",
+      description: `List all previously saved backtest results with summary stats.
+Use this to compare strategy performance across different pairs and timeframes.`,
+      parameters: { type: "object", properties: {} },
+    },
+  },
 ];
 
 export const tools = toolDefinitions.map((tool) => ({
