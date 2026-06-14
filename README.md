@@ -1,8 +1,10 @@
 # Spectrun
 
-**AI Autonomous Forex Trader for Prop-Firm Challenges — powered by LLMs via TradeLocker.**
+**AI Autonomous Forex Trader for Prop-Firm Challenges — powered by LLMs via TradeLocker or MetaTrader 5 (MetaApi Cloud).**
 
 Spectrun runs a Meridian-style ReAct agent loop, continuously scanning forex markets, executing trades, and managing positions — all while enforcing prop-firm challenge rules (daily drawdown, consistency, profit target) in hard code, never left to LLM discretion.
+
+Supports two brokers via a unified adapter layer: **TradeLocker** (OAuth 2.0, many prop firms) and **MetaTrader 5** via **MetaApi Cloud** (API-token auth, any MT5 prop firm).
 
 ---
 
@@ -13,7 +15,7 @@ Spectrun runs a Meridian-style ReAct agent loop, continuously scanning forex mar
 - **Enforces challenge rules** — hard-coded risk engine tracks daily loss, total drawdown, consistency, consecutive loss cooldowns, and news buffers. The LLM *cannot* override these.
 - **Learns from performance** — records every closed trade, derives lessons from wins and losses, and injects them into future agent cycles
 - **Forex news integration** — scrapes ForexFactory for high-impact events, blocks trading on affected pairs within configurable buffer windows
-- **TradeLocker native** — full REST API integration for account status, order execution, position management, and OHLCV data
+- **Multi-broker support** — TradeLocker RTradeLocker REST + WebSocket or MetaTrader 5 via MetaApi Cloud. Switch with `BROKER=metaapi` in `.env`. Unified adapter layer means all tools and strategies work identically on both platforms.
 - **CLI** — every tool accessible directly from the terminal with JSON output
 
 ---
@@ -46,8 +48,8 @@ All challenge rules are enforced in **`risk-manager.js`** — not in the LLM. Be
 - Position size (always calculated in code, never by the LLM)
 
 **Data sources:**
-- TradeLocker REST API — account status, order execution, positions, OHLCV candles
-- TradeLocker WebSocket — real-time price feed and account updates
+- Broker REST API — account status, order execution, positions, OHLCV candles
+- Broker WebSocket — real-time price feed and account updates (MetaApi WebSocket not yet implemented; uses REST polling)
 - ForexFactory (scraped) — high-impact news calendar
 - Economic Calendar API — fallback if scraping fails
 - OpenRouter — LLM inference (any compatible model)
@@ -58,7 +60,9 @@ All challenge rules are enforced in **`risk-manager.js`** — not in the LLM. Be
 
 - Node.js 18+
 - [OpenRouter](https://openrouter.ai) API key (or any OpenAI-compatible endpoint)
-- TradeLocker account (demo or live)
+- **Broker (choose one):**
+  - TradeLocker account (demo or live) — most prop firms offer TradeLocker
+  - [MetaApi Cloud](https://metaapi.cloud) account — for MetaTrader 4/5 prop firms. API token + MT5 account ID required.
 - Telegram bot token (optional)
 
 ---
@@ -84,11 +88,19 @@ cp .env.example .env
 Fill in your credentials:
 
 ```env
-# TradeLocker
+# Broker selection: "tradelocker" (default) or "metaapi"
+BROKER=tradelocker
+
+# ── TradeLocker (required when BROKER=tradelocker) ──
 TRADELOCKER_EMAIL=your_email@example.com
 TRADELOCKER_PASSWORD=your_password
 TRADELOCKER_SERVER=demo           # "demo" or "live"
 TRADELOCKER_ACCOUNT_ID=0
+
+# ── MetaApi Cloud (required when BROKER=metaapi) ──
+# Get your API token at https://app.metaapi.cloud/token
+# METAAPI_API_KEY=your_token
+# METAAPI_ACCOUNT_ID=your_account_id
 
 # OpenRouter
 OPENROUTER_API_KEY=sk-or-...
@@ -326,19 +338,32 @@ risk-manager.js       Hard risk enforcement (daily loss, drawdown, consistency)
 state.js              Trade registry, daily snapshots, challenge phase state
 news.js               ForexFactory scraper + economic calendar API fallback
 lessons.js            Learning engine: performance records, lesson derivation
-decision-log.js       Structured decision log for entries, exits, skips
+decision-log.js       Decision log for entries, exits, skips
 briefing.js           Daily performance briefing generator
+indicators.js         Shared pure-math indicators (ATR, EMA, RSI, trend)
 cli.js                Direct CLI — all tools as subcommands with JSON output
 
 tools/
   definitions.js      Tool schemas (OpenAI function-calling format)
   executor.js         Tool dispatch + pre-execution safety checks
 
-tradelocker/
-  client.js           REST + WebSocket client with OAuth, retry, rate limiting
+broker/               Unified adapter layer — delegates to active broker
   account.js          Account status, positions, order history
-  market-data.js      OHLCV candles, ATR/RSI/EMA/trend, instrument specs
   trading.js          Place/modify/close orders, lot size calculation
+  market-data.js      OHLCV candles, instrument specs, pip values, indicators
+  client.js           WebSocket connect/disconnect, account ID resolver
+
+tradelocker/          TradeLocker implementation (default broker)
+  client.js           REST + WebSocket client with OAuth 2.0, retry, rate limiting
+  account.js          TradeLocker API normalization
+  trading.js          TradeLocker order execution
+  market-data.js      TradeLocker OHLCV + re-exports indicators from ../indicators.js
+
+metaapi/              MetaApi Cloud (MetaTrader 5) implementation
+  client.js           REST client with API token auth + WebSocket stub
+  account.js          MetaApi API normalization
+  trading.js          MetaApi order execution
+  market-data.js      MetaApi OHLCV + instrument specs + re-exports indicators
 ```
 
 ---
@@ -363,6 +388,23 @@ Spectrun scrapes ForexFactory for high-impact news events. If scraping fails, it
 The `check_news_buffer` tool extracts currencies from the pair symbol (e.g., `EURUSD` → `["EUR", "USD"]`) and checks for HIGH-impact events within the configured buffer window. If a conflict is found, trading on that pair is blocked with a clear reason.
 
 ---
+
+## MetaTrader 5 / MetaApi Cloud setup
+
+1. Sign up at [MetaApi Cloud](https://app.metaapi.cloud) and copy your API token
+2. Add your MT5 account in the MetaApi dashboard — you'll get an Account ID
+3. Set these in `.env`:
+
+```env
+BROKER=metaapi
+METAAPI_API_KEY=your_token
+METAAPI_ACCOUNT_ID=your_account_id
+DRY_RUN=true    # test first, false when ready
+```
+
+MetaApi Cloud connects to your MT5 terminal (or VPS) via a MetaTrader bridge. No OAuth — authentication is via the API token header. Rate limiting and auto-retry are built in.
+
+**Note:** Real-time WebSocket streaming is not yet implemented for MetaApi. The agent uses REST polling for market data and account updates, which is sufficient for the current synchronous agent loop. WebSocket price streaming will be added in a future update.
 
 ## TradeLocker setup
 

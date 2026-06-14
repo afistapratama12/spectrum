@@ -5,6 +5,11 @@
 
   "agentId": "",
 
+  "broker": {
+    "provider": "tradelocker",
+    "_comment": "\"tradelocker\" or \"metaapi\" — set BROKER env var to override"
+  },
+
   "challenge": {
     "phase": "evaluation",
     "profitTargetPct": 4,

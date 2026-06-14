@@ -1,7 +1,9 @@
 import { get, getDefaultAccountId } from "./client.js";
 import { log } from "../logger.js";
 
-const DRY_RUN_MODE = process.env.DRY_RUN === "true" && (!process.env.TRADELOCKER_EMAIL || !process.env.TRADELOCKER_PASSWORD);
+export { calculateATR, calculateEMA, calculateRSI, determineTrend } from "../indicators.js";
+
+const DRY_RUN_MODE = process.env.DRY_RUN === "true" && (!process.env.METAAPI_API_KEY || !process.env.METAAPI_ACCOUNT_ID);
 
 function generateSyntheticOHLCV(symbol, resolution, count = 100) {
   const now = Date.now();
@@ -9,7 +11,6 @@ function generateSyntheticOHLCV(symbol, resolution, count = 100) {
   const interval = minutesMap[resolution] || 60;
   const candles = [];
 
-  // Base price per symbol
   const basePrices = {
     EURUSD: 1.0850, GBPUSD: 1.2650, USDJPY: 151.50, AUDUSD: 0.6550,
     USDCAD: 1.3580, NZDUSD: 0.5950, EURGBP: 0.8570, EURJPY: 164.20,
@@ -38,26 +39,25 @@ function generateSyntheticOHLCV(symbol, resolution, count = 100) {
   return candles;
 }
 
-/**
- * Get OHLCV candlestick data for a symbol.
- * Returns synthetic data in dry-run mode without credentials.
- */
 export async function getOHLCV({ symbol, resolution = "1h", from, to, count = 100 }) {
   if (DRY_RUN_MODE) return generateSyntheticOHLCV(symbol, resolution, count);
 
   try {
     const accountId = await getDefaultAccountId();
-    const params = { symbol, resolution, count };
+    const params = { limit: count };
 
     if (from) {
       params.from = typeof from === "number" ? from : Math.floor(new Date(from).getTime() / 1000);
-      delete params.count;
+      delete params.limit;
     }
     if (to) {
       params.to = typeof to === "number" ? to : Math.floor(new Date(to).getTime() / 1000);
     }
 
-    const data = await get(`/v1/trade/accounts/${accountId}/history`, params);
+    const data = await get(
+      `/users/current/accounts/${accountId}/history-candles/${symbol}/${resolution}`,
+      params
+    );
 
     const candles = Array.isArray(data?.bars) ? data.bars
       : Array.isArray(data?.candles) ? data.candles
@@ -70,21 +70,19 @@ export async function getOHLCV({ symbol, resolution = "1h", from, to, count = 10
       high: parseFloat(c.h || c.high),
       low: parseFloat(c.l || c.low),
       close: parseFloat(c.c || c.close),
-      volume: parseFloat(c.v || c.volume || 0),
+      volume: parseFloat(c.v || c.volume || c.tickVolume || 0),
     }));
   } catch (error) {
-    log("market_data_warn", `getOHLCV failed for ${symbol}: ${error.message}`);
+    log("metaapi_warn", `getOHLCV failed for ${symbol}: ${error.message}`);
     return [];
   }
 }
 
-/**
- * Get instrument specifications (pip value, contract size, spread, etc.).
- */
 export async function getInstrumentSpecs(symbol = null) {
   try {
-    const instruments = await get("/v1/instruments");
-    const list = Array.isArray(instruments) ? instruments : (instruments?.instruments || []);
+    const accountId = await getDefaultAccountId();
+    const data = await get(`/users/current/accounts/${accountId}/symbols`);
+    const list = Array.isArray(data) ? data : (data?.symbols || data?.instruments || []);
 
     const specs = list.map((inst) => ({
       symbol: inst.symbol || inst.name,
@@ -104,19 +102,15 @@ export async function getInstrumentSpecs(symbol = null) {
     if (symbol) return specs.find((s) => s.symbol === symbol) || null;
     return specs;
   } catch (error) {
-    log("market_data_warn", `getInstrumentSpecs failed: ${error.message}`);
+    log("metaapi_warn", `getInstrumentSpecs failed: ${error.message}`);
     return symbol ? null : [];
   }
 }
 
-/**
- * Get pip value for a symbol. Falls back to standard forex pip values if API fails.
- */
 export async function getPipValue(symbol, lotSize = 1.0) {
   const spec = await getInstrumentSpecs(symbol);
   if (spec) return spec.pipValue * lotSize;
 
-  // Standard forex pip values per standard lot
   const standardPipValues = {
     EURUSD: 10, GBPUSD: 10, AUDUSD: 10, NZDUSD: 10,
     USDCAD: 7.3, USDCHF: 9, USDJPY: 8.5,
@@ -124,5 +118,3 @@ export async function getPipValue(symbol, lotSize = 1.0) {
   };
   return (standardPipValues[symbol.replace(/[^A-Z]/g, "")] || 10) * lotSize;
 }
-
-export { calculateATR, calculateEMA, calculateRSI, determineTrend } from "../indicators.js";

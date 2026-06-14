@@ -1,6 +1,6 @@
-import { getAccountStatus, getOpenPositions, getTodayClosedTrades } from "../tradelocker/account.js";
-import { getOHLCV, getInstrumentSpecs, calculateATR, calculateRSI, calculateEMA, determineTrend } from "../tradelocker/market-data.js";
-import { placeOrder, modifyPosition, closePosition, closeAllPositions, calculateLotSize } from "../tradelocker/trading.js";
+import { getAccountStatus, getOpenPositions, getTodayClosedTrades } from "../broker/account.js";
+import { getOHLCV, getInstrumentSpecs, calculateATR, calculateRSI, calculateEMA, determineTrend } from "../broker/market-data.js";
+import { placeOrder, modifyPosition, closePosition, closeAllPositions, calculateLotSize } from "../broker/trading.js";
 import { getForexNews, checkNewsBuffer as checkNews, formatNewsForPrompt } from "../news.js";
 import { checkChallengeRules, computeRiskPositionSize, evaluateTrailingStop, evaluateTimeDecay, getRiskReport, updateDailySnapshot, checkPhaseTransition } from "../risk-manager.js";
 import { trackTrade, recordTradeClose, getOpenTrackedTrades, getTrackedTrades, setTradeInstruction, recordTrailingActivation, recordChallengePhase, getStateSummary, syncOpenTrades } from "../state.js";

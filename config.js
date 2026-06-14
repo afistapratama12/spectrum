@@ -33,6 +33,9 @@ function mergeDefault(target, defaults) {
 }
 
 const DEFAULTS = {
+  broker: {
+    provider: process.env.BROKER || "tradelocker",
+  },
   challenge: {
     phase: "evaluation",
     profitTargetPct: 4,

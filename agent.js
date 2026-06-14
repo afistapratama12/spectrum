@@ -3,7 +3,7 @@ import { jsonrepair } from "jsonrepair";
 import { buildSystemPrompt } from "./prompt.js";
 import { executeTool } from "./tools/executor.js";
 import { tools } from "./tools/definitions.js";
-import { getAccountStatus, getOpenPositions, getTodayClosedTrades } from "./tradelocker/account.js";
+import { getAccountStatus, getOpenPositions, getTodayClosedTrades } from "./broker/account.js";
 import { getRiskReport, updateDailySnapshot } from "./risk-manager.js";
 import { getLessonsForPrompt, getPerformanceSummary } from "./lessons.js";
 import { getDecisionSummary } from "./decision-log.js";

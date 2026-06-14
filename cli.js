@@ -4,7 +4,7 @@ import { config, computePositionSize, formatCurrency, formatPct } from "./config
 import { executeTool } from "./tools/executor.js";
 import { log } from "./logger.js";
 import { repoPath } from "./repo-root.js";
-import { getAccountStatus, getOpenPositions } from "./tradelocker/account.js";
+import { getAccountStatus, getOpenPositions } from "./broker/account.js";
 import { getForexNews, formatNewsForPrompt } from "./news.js";
 import { getRiskReport } from "./risk-manager.js";
 import { getPerformanceSummary } from "./lessons.js";

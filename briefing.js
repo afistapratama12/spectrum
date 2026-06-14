@@ -1,5 +1,5 @@
 import { config } from "./config.js";
-import { getAccountStatus, getOpenPositions } from "./tradelocker/account.js";
+import { getAccountStatus, getOpenPositions } from "./broker/account.js";
 import { getPerformanceSummary } from "./lessons.js";
 import { getForexNews, formatNewsForPrompt } from "./news.js";
 import { getChallengeState } from "./state.js";

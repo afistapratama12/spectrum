@@ -5,14 +5,14 @@ import { fileURLToPath } from "url";
 import { agentLoop } from "./agent.js";
 import { log } from "./logger.js";
 import { config } from "./config.js";
-import { getAccountStatus, getOpenPositions, getTodayClosedTrades } from "./tradelocker/account.js";
+import { getAccountStatus, getOpenPositions, getTodayClosedTrades } from "./broker/account.js";
 import { getRiskReport, updateDailySnapshot, checkPhaseTransition } from "./risk-manager.js";
 import { getChallengeState, getStateSummary } from "./state.js";
 import { executeTool } from "./tools/executor.js";
 import { generateBriefing } from "./briefing.js";
 import { getForexNews, formatNewsForPrompt } from "./news.js";
 import { getPerformanceSummary } from "./lessons.js";
-import { connectWebSocket, disconnectWebSocket } from "./tradelocker/client.js";
+import { connectWebSocket, disconnectWebSocket } from "./broker/client.js";
 import { startPolling, stopPolling, isEnabled as telegramEnabled, sendMessage, notifyScannerReport, notifyManagerReport } from "./telegram.js";
 import { REPO_ROOT } from "./repo-root.js";
 

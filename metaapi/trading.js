@@ -1,19 +1,13 @@
 import { post, put, del, getDefaultAccountId } from "./client.js";
 import { log } from "../logger.js";
 
-/**
- * Place a market or limit order with SL and TP.
- *
- * @param {Object} params
- * @param {string} params.symbol       — e.g. "EURUSD"
- * @param {string} params.type         — "buy" or "sell"
- * @param {number} params.volume       — lot size (e.g. 0.10)
- * @param {number} params.sl           — stop loss price (optional but recommended)
- * @param {number} params.tp           — take profit price (optional but recommended)
- * @param {string} params.orderType    — "market" (default) or "limit"
- * @param {number} params.price        — limit price (required for limit orders)
- * @param {string} params.comment      — optional comment
- */
+function normalizeType(type) {
+  const t = type.toLowerCase();
+  if (t === "buy") return "POSITION_TYPE_BUY";
+  if (t === "sell") return "POSITION_TYPE_SELL";
+  return type;
+}
+
 export async function placeOrder({
   symbol,
   type,
@@ -26,9 +20,8 @@ export async function placeOrder({
 }) {
   const body = {
     symbol,
-    type: type.toLowerCase(),
+    type: normalizeType(type),
     volume,
-    orderType: orderType.toLowerCase(),
     comment: comment || "Spectrun AI",
   };
 
@@ -36,7 +29,7 @@ export async function placeOrder({
   if (sl) body.stopLoss = sl;
   if (tp) body.takeProfit = tp;
 
-  log("trading", `Placing ${type.toUpperCase()} ${volume} lots ${symbol} @ ${price || "market"}${sl ? ` SL:${sl}` : ""}${tp ? ` TP:${tp}` : ""}`);
+  log("metaapi", `Placing ${type.toUpperCase()} ${volume} lots ${symbol} @ ${price || "market"}${sl ? ` SL:${sl}` : ""}${tp ? ` TP:${tp}` : ""}`);
 
   if (process.env.DRY_RUN === "true") {
     return {
@@ -49,27 +42,27 @@ export async function placeOrder({
   const accountId = await getDefaultAccountId();
 
   try {
-    const result = await post(`/v1/trade/accounts/${accountId}/orders`, body);
-    log("trading", `Order placed: ${result.ticket || result.orderId || "ok"}`);
+    const result = await post(`/users/current/accounts/${accountId}/trade`, {
+      actionType: "POSITION_OPEN",
+      ...body,
+    });
+    log("metaapi", `Order placed: ${result.orderId || result.positionId || result.ticket || "ok"}`);
     return {
       success: true,
-      ticket: result.ticket || result.orderId || result.id,
+      ticket: result.orderId || result.positionId || result.ticket || result.id,
       symbol,
       type,
       volume,
       openPrice: result.price || result.openPrice || price,
-      sl: result.sl || sl,
-      tp: result.tp || tp,
+      sl: result.stopLoss || sl,
+      tp: result.takeProfit || tp,
     };
   } catch (error) {
-    log("trading_error", `placeOrder failed: ${error.message}`);
+    log("metaapi_error", `placeOrder failed: ${error.message}`);
     return { success: false, error: error.message };
   }
 }
 
-/**
- * Modify an open position's SL and/or TP.
- */
 export async function modifyPosition({ positionId, sl = null, tp = null }) {
   const body = {};
   if (sl != null) body.stopLoss = sl;
@@ -79,7 +72,7 @@ export async function modifyPosition({ positionId, sl = null, tp = null }) {
     return { success: false, error: "No SL or TP provided to modify" };
   }
 
-  log("trading", `Modifying position ${positionId}: ${JSON.stringify(body)}`);
+  log("metaapi", `Modifying position ${positionId}: ${JSON.stringify(body)}`);
 
   if (process.env.DRY_RUN === "true") {
     return { dry_run: true, would_modify: { positionId, ...body } };
@@ -88,19 +81,16 @@ export async function modifyPosition({ positionId, sl = null, tp = null }) {
   const accountId = await getDefaultAccountId();
 
   try {
-    await put(`/v1/trade/accounts/${accountId}/orders/${positionId}`, body);
+    await put(`/users/current/accounts/${accountId}/positions/${positionId}`, body);
     return { success: true, positionId, ...body };
   } catch (error) {
-    log("trading_error", `modifyPosition failed: ${error.message}`);
+    log("metaapi_error", `modifyPosition failed: ${error.message}`);
     return { success: false, error: error.message };
   }
 }
 
-/**
- * Close a specific position. Optionally close only a percentage.
- */
 export async function closePosition({ positionId, volume = null }) {
-  log("trading", `Closing position ${positionId}${volume ? ` (partial: ${volume} lots)` : ""}`);
+  log("metaapi", `Closing position ${positionId}${volume ? ` (partial: ${volume} lots)` : ""}`);
 
   if (process.env.DRY_RUN === "true") {
     return { dry_run: true, would_close: positionId, volume };
@@ -109,7 +99,9 @@ export async function closePosition({ positionId, volume = null }) {
   const accountId = await getDefaultAccountId();
 
   try {
-    const result = await del(`/v1/trade/accounts/${accountId}/orders/${positionId}`);
+    const body = { actionType: "POSITION_CLOSE", positionId };
+    if (volume) body.volume = volume;
+    const result = await post(`/users/current/accounts/${accountId}/trade`, body);
     return {
       success: true,
       positionId,
@@ -117,14 +109,11 @@ export async function closePosition({ positionId, volume = null }) {
       profit: result?.profit || result?.pnl || 0,
     };
   } catch (error) {
-    log("trading_error", `closePosition failed: ${error.message}`);
+    log("metaapi_error", `closePosition failed: ${error.message}`);
     return { success: false, error: error.message };
   }
 }
 
-/**
- * Close all open positions. Emergency use only.
- */
 export async function closeAllPositions() {
   const { getOpenPositions } = await import("./account.js");
   const positions = await getOpenPositions();
@@ -133,7 +122,7 @@ export async function closeAllPositions() {
     return { closed: 0, message: "No open positions" };
   }
 
-  log("trading", `Closing ALL ${positions.length} positions`);
+  log("metaapi", `Closing ALL ${positions.length} positions`);
 
   if (process.env.DRY_RUN === "true") {
     return { dry_run: true, would_close: positions.length };
@@ -147,9 +136,6 @@ export async function closeAllPositions() {
   return { closed: succeeded, total: positions.length };
 }
 
-/**
- * Calculate lot size from account equity, risk %, and stop loss in pips.
- */
 export async function calculateLotSize({ equity, riskPct, slPips, symbol }) {
   const { getPipValue } = await import("./market-data.js");
   const pipValuePerLot = await getPipValue(symbol, 1.0);
@@ -158,8 +144,6 @@ export async function calculateLotSize({ equity, riskPct, slPips, symbol }) {
 
   const riskAmount = equity * (riskPct / 100);
   const lotsRaw = riskAmount / (slPips * pipValuePerLot);
-
-  // Round down to nearest step (0.01)
   const lots = Math.floor(lotsRaw * 100) / 100;
 
   return Math.max(0.01, lots);
