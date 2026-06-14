@@ -1,8 +1,8 @@
-# Spectrun
+# Spectrum
 
 **AI Autonomous Forex Trader for Prop-Firm Challenges — powered by LLMs via TradeLocker or MetaTrader 5 (MetaApi Cloud).**
 
-Spectrun runs a Meridian-style ReAct agent loop, continuously scanning forex markets, executing trades, and managing positions — all while enforcing prop-firm challenge rules (daily drawdown, consistency, profit target) in hard code, never left to LLM discretion.
+Spectrum runs a Meridian-style ReAct agent loop, continuously scanning forex markets, executing trades, and managing positions — all while enforcing prop-firm challenge rules (daily drawdown, consistency, profit target) in hard code, never left to LLM discretion.
 
 Supports two brokers via a unified adapter layer: **TradeLocker** (OAuth 2.0, many prop firms) and **MetaTrader 5** via **MetaApi Cloud** (API-token auth, any MT5 prop firm).
 
@@ -12,22 +12,27 @@ Supports two brokers via a unified adapter layer: **TradeLocker** (OAuth 2.0, ma
 
 - **Scans markets** — evaluates all configured forex pairs with multi-timeframe technical analysis (trend, momentum, volatility, session context) and surfaces high-conviction trade setups
 - **Manages trades** — monitors open positions, activates trailing stops, evaluates time-decay, and closes positions based on technical context and risk limits
+- **Market & pending orders** — places market entries plus **buy stop / sell stop / buy limit / sell limit** pending orders at precise levels. SL/TP use each instrument's real pip size (JPY-aware), never a hardcoded value.
 - **Enforces challenge rules** — hard-coded risk engine tracks daily loss, total drawdown, consistency, consecutive loss cooldowns, and news buffers. The LLM *cannot* override these.
+- **Equity Guardian** — a real-time safety net that polls equity every ~45s and, when the account nears a daily-loss or drawdown limit, closes all positions and halts new entries for the rest of the day. Closes the gap between the slower cron cycles.
+- **Trading style presets** — pick `scalping`, `intraday`, or `swing` and the agent auto-configures timeframes, risk, trailing, and cycle intervals. Any value you set explicitly still wins.
 - **Learns from performance** — records every closed trade, derives lessons from wins and losses, and injects them into future agent cycles
 - **Forex news integration** — scrapes ForexFactory for high-impact events, blocks trading on affected pairs within configurable buffer windows
-- **Multi-broker support** — TradeLocker RTradeLocker REST + WebSocket or MetaTrader 5 via MetaApi Cloud. Switch with `BROKER=metaapi` in `.env`. Unified adapter layer means all tools and strategies work identically on both platforms.
+- **12-hour reporting** — a full account/challenge/performance report is generated every 12 hours and pushed to Telegram
+- **Multi-broker support** — TradeLocker REST + WebSocket or MetaTrader 5 via MetaApi Cloud. Switch with `BROKER=metaapi` in `.env`. Unified adapter layer means all tools and strategies work identically on both platforms.
 - **CLI** — every tool accessible directly from the terminal with JSON output
 
 ---
 
 ## How it works
 
-Spectrun runs a **ReAct agent loop** — each cycle the LLM reasons over live data, calls tools, and acts. Two specialized agents run on independent cron schedules:
+Spectrum runs a **ReAct agent loop** — each cycle the LLM reasons over live data, calls tools, and acts. Two specialized agents run on independent cron schedules:
 
 | Agent | Default interval | Role |
 |---|---|---|
 | **Scanner Agent** | Every 30 min | Market scanning — finds high-conviction trade setups and executes entries |
 | **Manager Agent** | Every 10 min | Trade management — monitors positions, trails stops, closes on rules |
+| **Equity Guardian** | Every 45 sec | Real-time safety net — closes all + halts the day if equity nears a limit |
 
 ### Agent harness
 
@@ -46,6 +51,16 @@ All challenge rules are enforced in **`risk-manager.js`** — not in the LLM. Be
 - Consecutive loss cooldown
 - Daily trade limit
 - Position size (always calculated in code, never by the LLM)
+
+### Equity Guardian
+
+The cron cycles run every few minutes, so a fast move (news spike, gap) could blow through a limit *between* cycles. The **Equity Guardian** (`guardian.js`) polls equity on a short interval (default 45s) and acts *before* the hard limit is reached:
+
+- When daily loss reaches `guardianDailyLossTriggerPct` (default 90%) of the daily budget, **or** drawdown reaches `guardianTotalDDTriggerPct` (default 90%) of the max, it **closes all positions** and sets a day-scoped halt.
+- While halted, the executor blocks every new entry (market and pending) until the next UTC day.
+- The halt is surfaced in `/status` and the 12-hour report, and pushed to Telegram.
+
+This sharply reduces the chance of breaching a limit but cannot eliminate it — slippage and large gaps are physical market limits, not code.
 
 **Data sources:**
 - Broker REST API — account status, order execution, positions, OHLCV candles
@@ -72,8 +87,8 @@ All challenge rules are enforced in **`risk-manager.js`** — not in the LLM. Be
 ### 1. Clone & install
 
 ```bash
-git clone <repo-url> spectrun
-cd spectrun
+git clone <repo-url> spectrum
+cd spectrum
 npm install
 ```
 
@@ -124,7 +139,7 @@ npm start    # interactive REPL with autonomous cycles
 npm run dev  # same as npm start
 ```
 
-On startup Spectrun fetches your account status, open positions, and begins autonomous cycles immediately.
+On startup Spectrum fetches your account status, open positions, and begins autonomous cycles immediately.
 
 ---
 
@@ -152,7 +167,7 @@ REPL commands:
 | `/scan` | Trigger a scanner cycle manually |
 | `/manage` | Trigger a manager cycle manually |
 | `/news` | Upcoming high-impact events (24h) |
-| `/briefing` | Daily performance briefing |
+| `/briefing` | Full performance report (same as the 12-hour report) |
 | `/config` | Show current runtime config |
 | `/stop` | Graceful shutdown |
 | `<anything>` | Free-form chat — ask anything, request trades |
@@ -194,7 +209,7 @@ node cli.js config                       # Show current config
 node cli.js config set riskPerTradePct 1 # Update config
 node cli.js performance                  # Performance summary
 node cli.js decisions 10                 # Recent decisions
-node cli.js briefing                     # Daily briefing
+node cli.js briefing                     # Full performance report
 ```
 
 ### Non-TTY / PM2
@@ -211,6 +226,20 @@ npm run pm2:stop     # stop
 ## Config reference
 
 All fields are optional — defaults shown. Edit `user-config.json`.
+
+### Trading style (the only field most users need)
+
+| Field | Default | Description |
+|---|---|---|
+| `tradingStyle` | _(none)_ | `scalping`, `intraday`, or `swing`. Auto-fills timeframes, risk %, trailing, min R:R, and cycle intervals. |
+
+Presets are a starting point — any field you set explicitly elsewhere in `user-config.json` still overrides the preset.
+
+| Style | Entry TFs | Trend TFs | Risk/trade | Scanner / Manager |
+|---|---|---|---|---|
+| `scalping` | `1m, 5m` | `15m, 1h` | `0.5%` | `5m / 2m` |
+| `intraday` | `5m, 15m` | `1h, 4h` | `0.5%` | `30m / 10m` |
+| `swing` | `1h, 4h` | `4h, 1D` | `0.75%` | `120m / 30m` |
 
 ### Challenge
 
@@ -239,6 +268,8 @@ All fields are optional — defaults shown. Edit `user-config.json`.
 | `trailingStopEnabled` | `true` | Enable trailing stop |
 | `trailingTriggerPips` | `10` | Pips in profit before activating trail |
 | `trailingDistancePips` | `5` | Pips to trail behind current price |
+| `guardianDailyLossTriggerPct` | `0.9` | Equity Guardian acts at this fraction of the daily-loss budget |
+| `guardianTotalDDTriggerPct` | `0.9` | Equity Guardian acts at this fraction of the max drawdown |
 
 ### Strategy
 
@@ -256,7 +287,8 @@ All fields are optional — defaults shown. Edit `user-config.json`.
 |---|---|---|
 | `scannerIntervalMin` | `30` | Scanner cycle frequency |
 | `managerIntervalMin` | `10` | Manager cycle frequency |
-| `dailyBriefingHourUTC` | `1` | Daily briefing time (UTC) |
+| `reportIntervalHours` | `12` | Hours between full reports (pushed to Telegram) |
+| `guardianIntervalSec` | `45` | Equity Guardian polling interval |
 
 ### Models
 
@@ -335,11 +367,13 @@ config.js             Runtime config from user-config.json + .env
 repo-root.js          Stable absolute repo path
 logger.js             Structured logging with action audit trail
 risk-manager.js       Hard risk enforcement (daily loss, drawdown, consistency)
+guardian.js           Equity Guardian — real-time equity watcher + day halt
+trading-halt.js       Day-scoped halt flag shared by guardian + executor
 state.js              Trade registry, daily snapshots, challenge phase state
 news.js               ForexFactory scraper + economic calendar API fallback
 lessons.js            Learning engine: performance records, lesson derivation
 decision-log.js       Decision log for entries, exits, skips
-briefing.js           Daily performance briefing generator
+briefing.js           12-hour performance report generator
 indicators.js         Shared pure-math indicators (ATR, EMA, RSI, trend)
 cli.js                Direct CLI — all tools as subcommands with JSON output
 
@@ -349,7 +383,7 @@ tools/
 
 broker/               Unified adapter layer — delegates to active broker
   account.js          Account status, positions, order history
-  trading.js          Place/modify/close orders, lot size calculation
+  trading.js          Place/modify/close market + pending orders, cancel, lot size
   market-data.js      OHLCV candles, instrument specs, pip values, indicators
   client.js           WebSocket connect/disconnect, account ID resolver
 
@@ -377,13 +411,19 @@ risk_amount = equity × (riskPerTradePct / 100)
 lot_size    = risk_amount / (sl_pips × pip_value)
 ```
 
-The LLM provides direction + SL pips. The executor calculates the exact lot size and validates against all risk rules before sending to TradeLocker.
+The LLM provides direction + SL pips. The executor calculates the exact lot size and validates against all risk rules before sending to the broker.
+
+SL/TP **prices** are derived from each instrument's real pip size and digit precision (fetched from the broker's instrument specs, with a JPY-aware fallback) — never a hardcoded `0.0001`. This holds for both market and pending orders.
+
+### Pending orders
+
+Beyond market entries, the agent can place **buy stop / sell stop / buy limit / sell limit** orders via `place_pending_order` and withdraw them with `cancel_pending_order`. Lot size is still calculated in code, the same risk + news checks apply, and the executor validates that `entry_price` sits on the correct side of the current price for the chosen order type.
 
 ---
 
 ## News integration
 
-Spectrun scrapes ForexFactory for high-impact news events. If scraping fails, it falls back to a free economic calendar API.
+Spectrum scrapes ForexFactory for high-impact news events. If scraping fails, it falls back to a free economic calendar API.
 
 The `check_news_buffer` tool extracts currencies from the pair symbol (e.g., `EURUSD` → `["EUR", "USD"]`) and checks for HIGH-impact events within the configured buffer window. If a conflict is found, trading on that pair is blocked with a clear reason.
 

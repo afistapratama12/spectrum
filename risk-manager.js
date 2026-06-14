@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import { log } from "./logger.js";
 import { getTrackedTrades, getDailySnapshot, recordDailySnapshot, recordChallengePhase } from "./state.js";
+import { getHaltReason } from "./trading-halt.js";
 
 /**
  * Risk Manager — Hardware-enforced challenge rules.
@@ -167,7 +168,7 @@ export function computeRiskPositionSize({ equity, symbol, slPips, pipValue = nul
 /**
  * Check if a trailing stop should be activated and return new SL level.
  */
-export function evaluateTrailingStop({ position, currentPrice }) {
+export function evaluateTrailingStop({ position, currentPrice, pipSize = null }) {
   if (!config.risk.trailingStopEnabled) return null;
 
   const triggerPips = config.risk.trailingTriggerPips;
@@ -175,8 +176,12 @@ export function evaluateTrailingStop({ position, currentPrice }) {
   const isLong = position.type === "buy" || position.type === "long";
   const openPrice = position.openPrice;
 
-  // Calculate profit in pips
-  const pipSize = 0.0001; // standard for most forex pairs
+  // Pip size must match the instrument. Fall back to symbol inference
+  // (JPY pairs = 0.01) instead of blindly assuming 0.0001.
+  if (!pipSize) {
+    const clean = String(position.symbol || "").replace(/[^A-Za-z]/g, "").toUpperCase();
+    pipSize = clean.endsWith("JPY") ? 0.01 : 0.0001;
+  }
   const profitPips = isLong
     ? (currentPrice - openPrice) / pipSize
     : (openPrice - currentPrice) / pipSize;
@@ -237,7 +242,8 @@ export function getRiskReport(accountStatus, openPositions, closedToday) {
     `Total Drawdown: ${rules.totalDrawdownPct.toFixed(2)}% / ${challenge.maxTotalLossPct}% max`,
     `Positions: ${rules.currentPositions}/${rules.maxPositions} | Trades today: ${rules.tradesToday}/${config.risk.maxDailyTrades}`,
     `Profit Target: ${rules.dailyPnLPct >= 0 ? "+" : ""}${rules.dailyPnLPct.toFixed(2)}% / ${challenge.profitTargetPct}% target`,
-    `Can Trade: ${rules.canTrade ? "✅ YES" : "🚫 NO"}`,
+    `Can Trade: ${rules.canTrade && !getHaltReason() ? "✅ YES" : "🚫 NO"}`,
+    getHaltReason() ? `🛑 HALTED: ${getHaltReason()}` : null,
     rules.blockReasons.length > 0 ? `Blocked: ${rules.blockReasons.join(" | ")}` : null,
     rules.dailyLossWarning ? "⚠️ DAILY LOSS WARNING — approaching daily loss limit" : null,
     rules.consistencyDayWarning ? "⚠️ CONSISTENCY WARNING — monitor daily profit distribution" : null,

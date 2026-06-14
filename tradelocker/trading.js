@@ -68,6 +68,76 @@ export async function placeOrder({
 }
 
 /**
+ * Place a pending order (buy/sell × stop/limit) at a specific entry price.
+ */
+export async function placePendingOrder({
+  symbol,
+  type,
+  orderType,
+  volume,
+  price,
+  sl = null,
+  tp = null,
+  comment = "",
+}) {
+  const o = String(orderType).toLowerCase();
+  if (o !== "stop" && o !== "limit") {
+    return { success: false, error: `Invalid pending order type: ${orderType}` };
+  }
+
+  const body = {
+    symbol,
+    type: String(type).toLowerCase(),
+    volume,
+    orderType: o,
+    price,
+    comment: comment || "Spectrun AI",
+  };
+  if (sl) body.stopLoss = sl;
+  if (tp) body.takeProfit = tp;
+
+  log("trading", `Placing PENDING ${type.toUpperCase()} ${o.toUpperCase()} ${volume} lots ${symbol} @ ${price}${sl ? ` SL:${sl}` : ""}${tp ? ` TP:${tp}` : ""}`);
+
+  if (process.env.DRY_RUN === "true") {
+    return { dry_run: true, would_place: body, message: `DRY RUN — would place ${type} ${o} ${volume} ${symbol} @ ${price}` };
+  }
+
+  const accountId = await getDefaultAccountId();
+  try {
+    const result = await post(`/v1/trade/accounts/${accountId}/orders`, body);
+    log("trading", `Pending order placed: ${result.ticket || result.orderId || "ok"}`);
+    return {
+      success: true,
+      ticket: result.ticket || result.orderId || result.id,
+      symbol, type, orderType: o, volume, price, sl, tp, pending: true,
+    };
+  } catch (error) {
+    log("trading_error", `placePendingOrder failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Cancel a pending order by its order ID.
+ */
+export async function cancelOrder({ orderId }) {
+  log("trading", `Cancelling pending order ${orderId}`);
+
+  if (process.env.DRY_RUN === "true") {
+    return { dry_run: true, would_cancel: orderId };
+  }
+
+  const accountId = await getDefaultAccountId();
+  try {
+    await del(`/v1/trade/accounts/${accountId}/orders/${orderId}`);
+    return { success: true, orderId };
+  } catch (error) {
+    log("trading_error", `cancelOrder failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
  * Modify an open position's SL and/or TP.
  */
 export async function modifyPosition({ positionId, sl = null, tp = null }) {

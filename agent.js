@@ -13,7 +13,8 @@ import { log } from "./logger.js";
 const SCANNER_TOOLS = new Set([
   "get_account_status", "check_challenge_rules", "calculate_position_size",
   "get_pair_analysis", "scan_markets", "get_forex_news", "check_news_buffer",
-  "place_trade", "get_open_trades",
+  "place_trade", "place_pending_order", "get_pending_orders", "cancel_pending_order",
+  "get_open_trades",
   "scan_strategies", "get_consistency_report", "get_strategy_usage", "check_daily_consistency",
   "get_pattern_report", "query_journal",
 ]);
@@ -21,6 +22,7 @@ const SCANNER_TOOLS = new Set([
 const MANAGER_TOOLS = new Set([
   "get_account_status", "check_challenge_rules",
   "get_open_trades", "close_trade", "close_all_trades", "modify_trade",
+  "get_pending_orders", "cancel_pending_order",
   "get_forex_news",
   "get_consistency_report", "get_pattern_report",
 ]);
@@ -29,9 +31,9 @@ const GENERAL_PERSIST_TOOLS = new Set([
   "update_config", "add_lesson", "get_performance_history", "get_recent_decisions",
 ]);
 
-const WRITE_TOOLS = new Set(["place_trade", "close_trade", "close_all_trades", "modify_trade"]);
+const WRITE_TOOLS = new Set(["place_trade", "place_pending_order", "close_trade", "close_all_trades", "modify_trade"]);
 
-const ONCE_PER_SESSION = new Set(["place_trade", "close_trade"]);
+const ONCE_PER_SESSION = new Set(["place_trade", "place_pending_order", "close_trade"]);
 const NO_RETRY_TOOLS = new Set(["place_trade"]);
 
 function getToolsForRole(agentType) {

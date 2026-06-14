@@ -63,6 +63,85 @@ export async function placeOrder({
   }
 }
 
+function pendingActionType(type, orderType) {
+  const t = String(type).toLowerCase();
+  const o = String(orderType).toLowerCase();
+  if (t === "buy" && o === "limit") return "ORDER_TYPE_BUY_LIMIT";
+  if (t === "sell" && o === "limit") return "ORDER_TYPE_SELL_LIMIT";
+  if (t === "buy" && o === "stop") return "ORDER_TYPE_BUY_STOP";
+  if (t === "sell" && o === "stop") return "ORDER_TYPE_SELL_STOP";
+  return null;
+}
+
+/**
+ * Place a pending order (buy/sell × stop/limit) at a specific entry price.
+ */
+export async function placePendingOrder({
+  symbol,
+  type,
+  orderType,
+  volume,
+  price,
+  sl = null,
+  tp = null,
+  comment = "",
+}) {
+  const actionType = pendingActionType(type, orderType);
+  if (!actionType) {
+    return { success: false, error: `Invalid pending order: ${type} ${orderType}` };
+  }
+
+  const body = {
+    actionType,
+    symbol,
+    volume,
+    openPrice: price,
+    comment: comment || "Spectrun AI",
+  };
+  if (sl) body.stopLoss = sl;
+  if (tp) body.takeProfit = tp;
+
+  log("metaapi", `Placing PENDING ${type.toUpperCase()} ${orderType.toUpperCase()} ${volume} lots ${symbol} @ ${price}${sl ? ` SL:${sl}` : ""}${tp ? ` TP:${tp}` : ""}`);
+
+  if (process.env.DRY_RUN === "true") {
+    return { dry_run: true, would_place: body, message: `DRY RUN — would place ${type} ${orderType} ${volume} ${symbol} @ ${price}` };
+  }
+
+  const accountId = await getDefaultAccountId();
+  try {
+    const result = await post(`/users/current/accounts/${accountId}/trade`, body);
+    log("metaapi", `Pending order placed: ${result.orderId || result.ticket || "ok"}`);
+    return {
+      success: true,
+      ticket: result.orderId || result.ticket || result.id,
+      symbol, type, orderType, volume, price, sl, tp, pending: true,
+    };
+  } catch (error) {
+    log("metaapi_error", `placePendingOrder failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Cancel a pending order by its order ID.
+ */
+export async function cancelOrder({ orderId }) {
+  log("metaapi", `Cancelling pending order ${orderId}`);
+
+  if (process.env.DRY_RUN === "true") {
+    return { dry_run: true, would_cancel: orderId };
+  }
+
+  const accountId = await getDefaultAccountId();
+  try {
+    await post(`/users/current/accounts/${accountId}/trade`, { actionType: "ORDER_CANCEL", orderId });
+    return { success: true, orderId };
+  } catch (error) {
+    log("metaapi_error", `cancelOrder failed: ${error.message}`);
+    return { success: false, error: error.message };
+  }
+}
+
 export async function modifyPosition({ positionId, sl = null, tp = null }) {
   const body = {};
   if (sl != null) body.stopLoss = sl;

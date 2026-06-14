@@ -1,6 +1,6 @@
-import { getAccountStatus, getOpenPositions, getTodayClosedTrades } from "../broker/account.js";
+import { getAccountStatus, getOpenPositions, getPendingOrders, getTodayClosedTrades } from "../broker/account.js";
 import { getOHLCV, getInstrumentSpecs, calculateATR, calculateRSI, calculateEMA, determineTrend } from "../broker/market-data.js";
-import { placeOrder, modifyPosition, closePosition, closeAllPositions, calculateLotSize } from "../broker/trading.js";
+import { placeOrder, placePendingOrder, cancelOrder, modifyPosition, closePosition, closeAllPositions, calculateLotSize } from "../broker/trading.js";
 import { getForexNews, checkNewsBuffer as checkNews, formatNewsForPrompt } from "../news.js";
 import { checkChallengeRules, computeRiskPositionSize, evaluateTrailingStop, evaluateTimeDecay, getRiskReport, updateDailySnapshot, checkPhaseTransition } from "../risk-manager.js";
 import { trackTrade, recordTradeClose, getOpenTrackedTrades, getTrackedTrades, setTradeInstruction, recordTrailingActivation, recordChallengePhase, getStateSummary, syncOpenTrades } from "../state.js";
@@ -13,10 +13,49 @@ import { recordTradeForConsistency, getConsistencyReport, checkDailyConsistency,
 import { queryJournal, getJournalAnalytics } from "../trading-journal.js";
 import { getNewsCorrelations, getHighImpactEvents } from "../news.js";
 import { runBacktest, listBacktestResults } from "../backtest/engine.js";
+import { isTradingHalted, getHaltReason } from "../trading-halt.js";
 import fs from "fs";
 import { repoPath } from "../repo-root.js";
 
 const USER_CONFIG_PATH = repoPath("user-config.json");
+
+// ─── Instrument precision ─────────────────────────────────────────
+// NEVER hardcode pip size. JPY pairs use 0.01, most FX 0.0001, and crypto/
+// indices/metals vary wildly — so we always resolve from the broker's
+// instrument specs and only fall back to symbol inference when unavailable.
+const _precisionCache = new Map();
+
+function inferPrecision(symbol) {
+  const clean = String(symbol || "").replace(/[^A-Za-z]/g, "").toUpperCase();
+  const isJPY = clean.endsWith("JPY");
+  const pipSize = isJPY ? 0.01 : 0.0001;
+  return { pipSize, digits: isJPY ? 3 : 5, inferred: true };
+}
+
+async function getSymbolPrecision(symbol) {
+  if (_precisionCache.has(symbol)) return _precisionCache.get(symbol);
+
+  let precision = inferPrecision(symbol);
+  try {
+    const spec = await getInstrumentSpecs(symbol);
+    if (spec && spec.pipSize > 0) {
+      precision = {
+        pipSize: spec.pipSize,
+        digits: Number.isFinite(spec.digits) ? spec.digits : inferPrecision(symbol).digits,
+        inferred: false,
+      };
+    }
+  } catch {
+    // keep inferred fallback
+  }
+
+  _precisionCache.set(symbol, precision);
+  return precision;
+}
+
+function roundToDigits(price, digits) {
+  return Number(Number(price).toFixed(digits));
+}
 
 // ─── Tool Implementations ─────────────────────────────────────────
 
@@ -238,6 +277,15 @@ const toolMap = {
   },
 
   place_trade: async ({ symbol, type, volume, sl_pips, tp_pips, reason = "" }) => {
+    // 0. Equity Guardian halt — no new entries once the day is locked down
+    if (isTradingHalted()) {
+      return {
+        success: false,
+        blocked: true,
+        reason: `Trading halted by Equity Guardian: ${getHaltReason()}`,
+      };
+    }
+
     const account = await getAccountStatus();
     const positions = await getOpenPositions();
     const closedToday = await getTodayClosedTrades();
@@ -285,7 +333,7 @@ const toolMap = {
     }
     const currentPrice = candles[candles.length - 1].close;
 
-    const pipSize = 0.0001; // standard for most pairs
+    const { pipSize, digits } = await getSymbolPrecision(symbol);
     const slPrice = type === "buy"
       ? currentPrice - sl_pips * pipSize
       : currentPrice + sl_pips * pipSize;
@@ -298,8 +346,8 @@ const toolMap = {
       symbol,
       type,
       volume,
-      sl: Math.round(slPrice * 100000) / 100000,
-      tp: Math.round(tpPrice * 100000) / 100000,
+      sl: roundToDigits(slPrice, digits),
+      tp: roundToDigits(tpPrice, digits),
       orderType: "market",
       comment: reason || "Spectrun AI",
     });
@@ -340,9 +388,133 @@ const toolMap = {
       ...result,
       risk: sizeCheck,
       currentPrice,
-      slPrice: Math.round(slPrice * 100000) / 100000,
-      tpPrice: Math.round(tpPrice * 100000) / 100000,
+      slPrice: roundToDigits(slPrice, digits),
+      tpPrice: roundToDigits(tpPrice, digits),
     };
+  },
+
+  place_pending_order: async ({ symbol, order_type, entry_price, sl_pips, tp_pips, reason = "" }) => {
+    // 0. Equity Guardian halt
+    if (isTradingHalted()) {
+      return { success: false, blocked: true, reason: `Trading halted by Equity Guardian: ${getHaltReason()}` };
+    }
+
+    const type = order_type.startsWith("buy") ? "buy" : "sell";
+    const orderType = order_type.endsWith("stop") ? "stop" : "limit";
+
+    const account = await getAccountStatus();
+    const positions = await getOpenPositions();
+    const closedToday = await getTodayClosedTrades();
+
+    // 1. Risk check
+    const rules = checkChallengeRules({ accountStatus: account, openPositions: positions, closedToday });
+    if (!rules.canTrade) {
+      return { success: false, blocked: true, reason: `Risk rules blocked order: ${rules.blockReasons.join(" | ")}`, rules };
+    }
+
+    // 2. News buffer check
+    const events = await getForexNews({ hoursAhead: 2 });
+    const newsCheck = checkNews({ symbol, newsEvents: events });
+    if (newsCheck.blocked) {
+      return { success: false, blocked: true, reason: newsCheck.reason };
+    }
+
+    // 3. Validate entry_price direction matches the order semantics
+    const candles = await getOHLCV({ symbol, resolution: "5m", count: 5 });
+    if (candles.length === 0) {
+      return { success: false, error: `No price data available for ${symbol}` };
+    }
+    const currentPrice = candles[candles.length - 1].close;
+    const dirOk =
+      (order_type === "buy_stop" && entry_price > currentPrice) ||
+      (order_type === "sell_stop" && entry_price < currentPrice) ||
+      (order_type === "buy_limit" && entry_price < currentPrice) ||
+      (order_type === "sell_limit" && entry_price > currentPrice);
+    if (!dirOk) {
+      return {
+        success: false,
+        error: `entry_price ${entry_price} is on the wrong side of current price ${currentPrice} for ${order_type}. ` +
+          `stop orders trigger in the trade direction; limit orders trigger on a pullback.`,
+      };
+    }
+
+    // 4. Position size (calculated in code)
+    const sizeCheck = computeRiskPositionSize({ equity: account.equity, symbol, slPips: sl_pips });
+    const volume = sizeCheck.lots;
+    if (!volume || volume < 0.01) {
+      return { success: false, error: `Invalid lot size from risk calc: ${sizeCheck.breakdown || sizeCheck.error}` };
+    }
+
+    // 5. SL/TP prices from entry_price using real instrument precision
+    const { pipSize, digits } = await getSymbolPrecision(symbol);
+    const slPrice = type === "buy" ? entry_price - sl_pips * pipSize : entry_price + sl_pips * pipSize;
+    const tpPrice = type === "buy" ? entry_price + tp_pips * pipSize : entry_price - tp_pips * pipSize;
+
+    // 6. Place pending order
+    const result = await placePendingOrder({
+      symbol,
+      type,
+      orderType,
+      volume,
+      price: roundToDigits(entry_price, digits),
+      sl: roundToDigits(slPrice, digits),
+      tp: roundToDigits(tpPrice, digits),
+      comment: reason || "Spectrun AI",
+    });
+
+    if (!result.success && !result.dry_run) {
+      return result;
+    }
+
+    appendDecision({
+      type: "pending",
+      actor: "SCANNER",
+      symbol,
+      summary: `${order_type.toUpperCase()} ${volume} ${symbol} @ ${entry_price}`,
+      reason: reason || "AI pending setup",
+      metrics: { order_type, entry_price, sl_pips, tp_pips, risk_pct: config.risk.riskPerTradePct },
+    });
+
+    return {
+      ...result,
+      risk: sizeCheck,
+      currentPrice,
+      slPrice: roundToDigits(slPrice, digits),
+      tpPrice: roundToDigits(tpPrice, digits),
+    };
+  },
+
+  get_pending_orders: async () => {
+    const orders = await getPendingOrders();
+    return {
+      count: orders.length,
+      orders: orders.map((o) => ({
+        ticket: o.ticket || o.id || o.orderId,
+        symbol: o.symbol,
+        type: o.type || o.side,
+        orderType: o.orderType || o.type,
+        price: o.openPrice ?? o.price ?? o.limitPrice ?? o.stopPrice,
+        volume: o.volume ?? o.qty ?? o.quantity,
+        sl: o.stopLoss ?? o.sl ?? null,
+        tp: o.takeProfit ?? o.tp ?? null,
+        createdAt: o.createdAt || o.time || null,
+      })),
+    };
+  },
+
+  cancel_pending_order: async ({ ticket, reason = "manual" }) => {
+    const result = await cancelOrder({ orderId: ticket });
+    if (result.success || result.dry_run) {
+      appendDecision({
+        type: "cancel",
+        actor: "MANAGER",
+        symbol: "pending order",
+        summary: `Cancelled pending order ${ticket}`,
+        reason,
+        metrics: {},
+      });
+    }
+    return result;
   },
 
   get_open_trades: async () => {
@@ -353,8 +525,8 @@ const toolMap = {
 
     return {
       count: positions.length,
-      positions: positions.map((p) => {
-        const pipSize = 0.0001;
+      positions: await Promise.all(positions.map(async (p) => {
+        const { pipSize } = await getSymbolPrecision(p.symbol);
         const pipsFromEntry = p.openPrice && p.currentPrice
           ? Math.round((Math.abs(p.currentPrice - p.openPrice) / pipSize) * 10) / 10
           : 0;
@@ -373,7 +545,7 @@ const toolMap = {
           tp: p.tp,
           openTime: p.openTime,
         };
-      }),
+      })),
     };
   },
 

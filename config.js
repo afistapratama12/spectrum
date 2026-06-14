@@ -60,6 +60,8 @@ const DEFAULTS = {
     trailingDistancePips: 5,
     partialCloseEnabled: false,
     partialClosePct: 50,
+    guardianDailyLossTriggerPct: 0.9,
+    guardianTotalDDTriggerPct: 0.9,
   },
   strategy: {
     trendTimeframes: ["1h", "4h", "1D"],
@@ -75,6 +77,8 @@ const DEFAULTS = {
     managerIntervalMin: 10,
     healthCheckIntervalMin: 60,
     dailyBriefingHourUTC: 1,
+    reportIntervalHours: 12,
+    guardianIntervalSec: 45,
   },
   llm: {
     scannerModel: process.env.LLM_MODEL || "openrouter/healer-alpha",
@@ -85,6 +89,41 @@ const DEFAULTS = {
     maxSteps: 10,
   },
 };
+
+// ─── Trading style presets ────────────────────────────────────────
+// The user only picks a style; these fill the detailed knobs. Anything the
+// user set explicitly in user-config.json still wins (mergeDefault only fills
+// undefined fields), so a preset is a starting point, not a lock-in.
+const STYLE_PRESETS = {
+  scalping: {
+    strategy: { trendTimeframes: ["15m", "1h"], entryTimeframes: ["1m", "5m"] },
+    risk: { riskPerTradePct: 0.5, trailingTriggerPips: 6, trailingDistancePips: 3 },
+    challenge: { minRiskRewardRatio: 1.2 },
+    schedule: { scannerIntervalMin: 5, managerIntervalMin: 2 },
+  },
+  intraday: {
+    strategy: { trendTimeframes: ["1h", "4h"], entryTimeframes: ["5m", "15m"] },
+    risk: { riskPerTradePct: 0.5, trailingTriggerPips: 10, trailingDistancePips: 5 },
+    challenge: { minRiskRewardRatio: 1.5 },
+    schedule: { scannerIntervalMin: 30, managerIntervalMin: 10 },
+  },
+  swing: {
+    strategy: { trendTimeframes: ["4h", "1D"], entryTimeframes: ["1h", "4h"] },
+    risk: { riskPerTradePct: 0.75, trailingTriggerPips: 25, trailingDistancePips: 12 },
+    challenge: { minRiskRewardRatio: 2, weekendHolding: true },
+    schedule: { scannerIntervalMin: 120, managerIntervalMin: 30 },
+  },
+};
+
+const tradingStyle = String(userConfig.tradingStyle || userConfig.strategy?.tradingStyle || "").toLowerCase();
+if (tradingStyle) {
+  if (STYLE_PRESETS[tradingStyle]) {
+    mergeDefault(userConfig, STYLE_PRESETS[tradingStyle]);
+    log("config", `Trading style preset applied: ${tradingStyle}`);
+  } else {
+    log("config_warn", `Unknown tradingStyle "${tradingStyle}" — valid: ${Object.keys(STYLE_PRESETS).join(", ")}`);
+  }
+}
 
 mergeDefault(userConfig, DEFAULTS);
 

@@ -159,6 +159,59 @@ WARNING: This executes a real trade on the account. Check DRY_RUN mode.`,
   {
     type: "function",
     function: {
+      name: "place_pending_order",
+      description: `Place a PENDING order that triggers only when price reaches your entry level. Lot size is calculated in code from risk %, SL distance — do NOT pass volume.
+
+Order types:
+- buy_stop: buy when price rises to entry (breakout long) — entry ABOVE current price
+- sell_stop: sell when price falls to entry (breakdown short) — entry BELOW current price
+- buy_limit: buy when price dips to entry (pullback long) — entry BELOW current price
+- sell_limit: sell when price rises to entry (pullback short) — entry ABOVE current price
+
+The risk manager enforces all challenge rules (daily loss, drawdown, position limits, news buffer) before the order is accepted. SL/TP are computed from entry_price using the instrument's real pip size.`,
+      parameters: {
+        type: "object",
+        properties: {
+          symbol: { type: "string", description: "Trading symbol e.g. EURUSD" },
+          order_type: { type: "string", enum: ["buy_stop", "sell_stop", "buy_limit", "sell_limit"], description: "Pending order type" },
+          entry_price: { type: "number", description: "Price level at which the order should trigger" },
+          sl_pips: { type: "number", description: "Stop loss distance in pips from entry_price" },
+          tp_pips: { type: "number", description: "Take profit distance in pips from entry_price" },
+          reason: { type: "string", description: "Brief rationale for the decision log" },
+        },
+        required: ["symbol", "order_type", "entry_price", "sl_pips", "tp_pips"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "get_pending_orders",
+      description: `List all pending orders that have not triggered yet (buy/sell stop & limit).
+Returns ticket ID, symbol, type, trigger price, volume, SL, and TP for each.
+Use this to review working orders before placing new ones or to find a ticket to cancel.`,
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "cancel_pending_order",
+      description: `Cancel a pending order that has not triggered yet, by its order/ticket ID.
+Use when the setup is invalidated before price reaches the entry level.`,
+      parameters: {
+        type: "object",
+        properties: {
+          ticket: { type: "string", description: "The pending order ID to cancel" },
+          reason: { type: "string", description: "Why this order is being cancelled" },
+        },
+        required: ["ticket"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "get_open_trades",
       description: `List all currently open trades with:
 - Ticket ID, symbol, direction, lot size

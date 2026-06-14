@@ -443,7 +443,10 @@ export function checkNewsBuffer({ symbol, newsEvents }) {
 
   const currencies = [symbol.slice(0, 3), symbol.slice(3, 6)];
 
-  const conflicting = newsEvents.filter((e) => {
+  // getForexNews() returns { events, ... }; accept either the array or that object.
+  const list = Array.isArray(newsEvents) ? newsEvents : (newsEvents?.events ?? []);
+
+  const conflicting = list.filter((e) => {
     if (!currencies.includes(e.currency)) return false;
     const eventTime = new Date(e.time).getTime();
     const timeUntil = eventTime - now;
@@ -492,12 +495,14 @@ function formatNewsSummary(events) {
 }
 
 export function formatNewsForPrompt(events) {
-  if (!events || events.length === 0) {
+  // Accept either the events array or the getForexNews() response object.
+  const list = Array.isArray(events) ? events : (events?.events ?? []);
+  if (list.length === 0) {
     return "📅 No news events in the upcoming window.";
   }
 
-  const high = events.filter((e) => e.impactSeverity >= 4);
-  const med = events.filter((e) => e.impactSeverity >= 2 && e.impactSeverity < 4);
+  const high = list.filter((e) => e.impactSeverity >= 4);
+  const med = list.filter((e) => e.impactSeverity >= 2 && e.impactSeverity < 4);
 
   const lines = ["📰 NEWS CALENDAR"];
 
@@ -532,7 +537,8 @@ export function getNewsContextForPair(symbol, newsEvents) {
   const currencies = [symbol.slice(0, 3), symbol.slice(3, 6)];
   const now = Date.now();
 
-  const relevant = newsEvents.filter((e) => {
+  const list = Array.isArray(newsEvents) ? newsEvents : (newsEvents?.events ?? []);
+  const relevant = list.filter((e) => {
     if (!currencies.includes(e.currency)) return false;
     const eventTime = new Date(e.time).getTime();
     // Events within 2h either direction

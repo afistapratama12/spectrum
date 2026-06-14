@@ -5,6 +5,9 @@
 
   "agentId": "",
 
+  "_tradingStyle": "Pick one: \"scalping\", \"intraday\", or \"swing\". Auto-fills timeframes, risk, trailing & cycle intervals. Anything you set below still overrides the preset.",
+  "tradingStyle": "intraday",
+
   "broker": {
     "provider": "tradelocker",
     "_comment": "\"tradelocker\" or \"metaapi\" — set BROKER env var to override"
@@ -34,7 +37,10 @@
     "trailingTriggerPips": 10,
     "trailingDistancePips": 5,
     "partialCloseEnabled": false,
-    "partialClosePct": 50
+    "partialClosePct": 50,
+    "_guardian": "Equity Guardian: close all + halt for the day when loss reaches this fraction of the limit (0.9 = act at 90%)",
+    "guardianDailyLossTriggerPct": 0.9,
+    "guardianTotalDDTriggerPct": 0.9
   },
 
   "strategy": {
@@ -51,7 +57,8 @@
     "scannerIntervalMin": 30,
     "managerIntervalMin": 10,
     "healthCheckIntervalMin": 60,
-    "dailyBriefingHourUTC": 1
+    "reportIntervalHours": 12,
+    "guardianIntervalSec": 45
   },
 
   "llm": {

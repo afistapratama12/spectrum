@@ -13,6 +13,7 @@ import { generateBriefing } from "./briefing.js";
 import { getForexNews, formatNewsForPrompt } from "./news.js";
 import { getPerformanceSummary } from "./lessons.js";
 import { connectWebSocket, disconnectWebSocket } from "./broker/client.js";
+import { startGuardian, stopGuardian } from "./guardian.js";
 import { startPolling, stopPolling, isEnabled as telegramEnabled, sendMessage, notifyScannerReport, notifyManagerReport } from "./telegram.js";
 import { REPO_ROOT } from "./repo-root.js";
 
@@ -159,14 +160,17 @@ function startCronJobs() {
     runManagerCycle
   );
 
+  // Periodic report — default every 12 hours (00:00 & 12:00 UTC)
+  const reportIntervalHours = Math.min(24, Math.max(1, config.schedule.reportIntervalHours ?? 12));
   const briefingTask = nodeCron.schedule(
-    `0 ${config.schedule.dailyBriefingHourUTC} * * *`,
+    `0 */${reportIntervalHours} * * *`,
     async () => {
       try {
         const briefing = await generateBriefing();
-        log("cron", "Daily briefing generated");
+        log("cron", `${reportIntervalHours}h report generated`);
+        if (telegramEnabled()) await sendMessage(briefing).catch(() => {});
       } catch (e) {
-        log("cron_error", `Briefing failed: ${e.message}`);
+        log("cron_error", `Report failed: ${e.message}`);
       }
     },
     { timezone: "UTC" }
@@ -174,11 +178,15 @@ function startCronJobs() {
 
   _cronTasks = [scannerTask, managerTask, briefingTask];
   log("cron", `Cycles: scanner ${config.schedule.scannerIntervalMin}m, manager ${config.schedule.managerIntervalMin}m`);
+
+  // Real-time safety net — runs far more often than the cron cycles
+  startGuardian();
 }
 
 function stopCronJobs() {
   for (const task of _cronTasks) task.stop();
   _cronTasks = [];
+  stopGuardian();
 }
 
 // ═══════════════════════════════════════════

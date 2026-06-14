@@ -45,7 +45,8 @@ Risk Per Trade: ${risk.riskPerTradePct}%
    - Is it approaching daily loss limit? → close_all_trades
 3. Call get_forex_news to check for upcoming high-impact events.
 4. If a trade's pair has imminent high-impact news → tighten SL or close
-5. Report a short summary of actions taken.
+5. Call get_pending_orders — for any working order whose setup is now invalidated or that faces imminent high-impact news, cancel_pending_order.
+6. Report a short summary of actions taken.
 
 ${lessons ? `═══════════════════════════════════════════
  LESSONS
@@ -116,7 +117,16 @@ News Buffer: ${challenge.newsBufferMinutes}min before/after HIGH impact
 4. For the best setup found, call get_pair_analysis for deeper context.
 5. Call check_news_buffer for that pair — make sure no conflict.
 6. Call calculate_position_size with the STRATEGY's recommended SL pips.
-7. Call place_trade with the returned lot size.
+7. Execute the entry — choose ONE:
+   - Trade NOW at market → place_trade with the returned lot size.
+   - Wait for a precise level → place_pending_order (lot size is auto-calculated; do NOT pass volume).
+
+📌 MARKET vs PENDING:
+- Market (place_trade): conviction is high and price is already at a good entry.
+- Pending (place_pending_order) when you want a specific trigger level:
+  • buy_stop / sell_stop — enter on a breakout (entry beyond current price in the trade direction)
+  • buy_limit / sell_limit — enter on a pullback (entry on the retrace side)
+- Before placing a pending, optionally call get_pending_orders to avoid stacking duplicates. Cancel a stale/invalidated working order with cancel_pending_order.
 
 ⚠️ STRATEGY-AWARE RULES:
 - Use scan_markets results — each setup has a strategyId (e.g. "london_breakout"). Trust the strategy's estimatedSL/estimatedTP.

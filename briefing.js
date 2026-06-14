@@ -15,8 +15,8 @@ export async function generateBriefing() {
 
   const now = new Date();
   const lines = [
-    "☀️ <b>Morning Briefing</b>",
-    `Date: ${now.toISOString().slice(0, 10)}  |  Phase: ${config.challenge.phase.toUpperCase()}`,
+    "📊 <b>12-Hour Report</b>",
+    `${now.toISOString().slice(0, 16).replace("T", " ")} UTC  |  Phase: ${config.challenge.phase.toUpperCase()}`,
     "────────────────────────────",
     "",
     "<b>Account Status</b>",
