@@ -7,7 +7,15 @@ lessons.json
 decision-log.json
 daily-snapshots.json
 consistency.json
+trading-memory.json
+trading-journal.json
+news-correlation.json
 pool-memory.json
 signal-weights.json
 smart-wallets.json
 hivemind-cache.json
+
+# SQLite state store (B1)
+spectrum.db
+spectrum.db-wal
+spectrum.db-shm

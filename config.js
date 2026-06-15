@@ -62,6 +62,7 @@ const DEFAULTS = {
     partialClosePct: 50,
     guardianDailyLossTriggerPct: 0.9,
     guardianTotalDDTriggerPct: 0.9,
+    maxCandleAgeMin: 10,
   },
   strategy: {
     trendTimeframes: ["1h", "4h", "1D"],
@@ -79,11 +80,13 @@ const DEFAULTS = {
     dailyBriefingHourUTC: 1,
     reportIntervalHours: 12,
     guardianIntervalSec: 45,
+    reconcileIntervalMin: 5,
   },
   llm: {
     scannerModel: process.env.LLM_MODEL || "openrouter/healer-alpha",
     managerModel: process.env.LLM_MODEL || "openrouter/healer-alpha",
     generalModel: process.env.LLM_MODEL || "openrouter/healer-alpha",
+    fallbackModels: [],
     temperature: 0.3,
     maxTokens: 4096,
     maxSteps: 10,

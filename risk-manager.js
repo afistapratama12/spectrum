@@ -269,15 +269,20 @@ export function updateDailySnapshot(accountStatus) {
     return;
   }
 
-  // Update peak and trough
-  const updated = {
+  // Only persist when peak or trough actually moves. The Equity Guardian calls
+  // this every ~45s; skipping no-op writes keeps disk churn near zero on calm
+  // periods (writes only happen when a new daily high/low is made).
+  const newPeak = Math.max(existing.peakEquity, accountStatus.equity);
+  const newTrough = Math.min(existing.troughEquity, accountStatus.equity);
+  if (newPeak === existing.peakEquity && newTrough === existing.troughEquity) return;
+
+  recordDailySnapshot({
     date: today,
     startEquity: existing.startEquity,
-    peakEquity: Math.max(existing.peakEquity, accountStatus.equity),
-    troughEquity: Math.min(existing.troughEquity, accountStatus.equity),
+    peakEquity: newPeak,
+    troughEquity: newTrough,
     tradesCount: existing.tradesCount,
-  };
-  recordDailySnapshot(updated);
+  });
 }
 
 // ─── Challenge Phase Management ───────────────────────────────────

@@ -9,6 +9,7 @@
     "dev": "node index.js",
     "setup": "node setup.js",
     "cli": "node cli.js",
+    "test": "rm -f /tmp/spectrum-test.db* && SPECTRUM_DB=/tmp/spectrum-test.db DRY_RUN=true BROKER=metaapi node --test --test-concurrency=1 test/*.test.js",
     "pm2:start": "pm2 start ecosystem.config.cjs",
     "pm2:restart": "pm2 restart spectrun",
     "pm2:logs": "pm2 logs spectrun",

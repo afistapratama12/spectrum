@@ -9,9 +9,9 @@
  * - Multi-timeframe lesson derivation (single trade → daily → weekly patterns)
  * - Confidence-weighted lesson ranking
  */
-import fs from "fs";
 import { log } from "./logger.js";
 import { repoPath } from "./repo-root.js";
+import { readJSON, writeJSONAtomic } from "./storage.js";
 import { getActiveSession } from "./strategies/index.js";
 import { getHighImpactEvents } from "./news.js";
 
@@ -21,19 +21,15 @@ const MEMORY_FILE = repoPath("trading-memory.json");
 // ─── Persistence ──────────────────────────────────────────────────
 
 function load() {
-  if (!fs.existsSync(LESSONS_FILE)) return { lessons: [], performance: [], patterns: {}, pausedStrategies: [] };
-  try { return JSON.parse(fs.readFileSync(LESSONS_FILE, "utf8")); }
-  catch { return { lessons: [], performance: [], patterns: {}, pausedStrategies: [] }; }
+  return readJSON(LESSONS_FILE, () => ({ lessons: [], performance: [], patterns: {}, pausedStrategies: [] }));
 }
 
 function loadMemory() {
-  if (!fs.existsSync(MEMORY_FILE)) return { byPair: {}, bySession: {}, byDay: {}, byNewsDay: {}, strategyStats: {} };
-  try { return JSON.parse(fs.readFileSync(MEMORY_FILE, "utf8")); }
-  catch { return { byPair: {}, bySession: {}, byDay: {}, byNewsDay: {}, strategyStats: {} }; }
+  return readJSON(MEMORY_FILE, () => ({ byPair: {}, bySession: {}, byDay: {}, byNewsDay: {}, strategyStats: {} }));
 }
 
-function save(data) { fs.writeFileSync(LESSONS_FILE, JSON.stringify(data, null, 2)); }
-function saveMemory(m) { fs.writeFileSync(MEMORY_FILE, JSON.stringify(m, null, 2)); }
+function save(data) { writeJSONAtomic(LESSONS_FILE, data); }
+function saveMemory(m) { writeJSONAtomic(MEMORY_FILE, m); }
 
 // ─── Record Trade Performance (Enhanced) ──────────────────────────
 

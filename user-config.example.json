@@ -40,7 +40,9 @@
     "partialClosePct": 50,
     "_guardian": "Equity Guardian: close all + halt for the day when loss reaches this fraction of the limit (0.9 = act at 90%)",
     "guardianDailyLossTriggerPct": 0.9,
-    "guardianTotalDDTriggerPct": 0.9
+    "guardianTotalDDTriggerPct": 0.9,
+    "_maxCandleAgeMin": "Block entries if the latest candle is older than this (stale-feed / weekend guard)",
+    "maxCandleAgeMin": 10
   },
 
   "strategy": {
@@ -58,13 +60,16 @@
     "managerIntervalMin": 10,
     "healthCheckIntervalMin": 60,
     "reportIntervalHours": 12,
-    "guardianIntervalSec": 45
+    "guardianIntervalSec": 45,
+    "reconcileIntervalMin": 5
   },
 
   "llm": {
     "scannerModel": "openrouter/healer-alpha",
     "managerModel": "openrouter/healer-alpha",
     "generalModel": "openrouter/healer-alpha",
+    "_fallbackModels": "Tried in order if the primary model times out / rate-limits / errors (B5). Keeps the 24/7 agent alive.",
+    "fallbackModels": [],
     "temperature": 0.3,
     "maxTokens": 2048,
     "maxSteps": 15

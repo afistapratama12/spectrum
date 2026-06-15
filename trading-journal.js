@@ -8,18 +8,16 @@
  * - Query engine: "how did EURUSD perform during NFP days?"
  * - Performance analytics: MAE/MFE, holding time distribution, R:R scatter
  */
-import fs from "fs";
 import { repoPath } from "./repo-root.js";
+import { readJSON, writeJSONAtomic } from "./storage.js";
 
 const JOURNAL_FILE = repoPath("trading-journal.json");
 
 function load() {
-  if (!fs.existsSync(JOURNAL_FILE)) return { entries: [], snapshots: [], analytics: {} };
-  try { return JSON.parse(fs.readFileSync(JOURNAL_FILE, "utf8")); }
-  catch { return { entries: [], snapshots: [], analytics: {} }; }
+  return readJSON(JOURNAL_FILE, () => ({ entries: [], snapshots: [], analytics: {} }));
 }
 
-function save(data) { fs.writeFileSync(JOURNAL_FILE, JSON.stringify(data, null, 2)); }
+function save(data) { writeJSONAtomic(JOURNAL_FILE, data); }
 
 // ─── Record Full Trade Lifecycle ──────────────────────────────────
 

@@ -14,6 +14,7 @@ import { getForexNews, formatNewsForPrompt } from "./news.js";
 import { getPerformanceSummary } from "./lessons.js";
 import { connectWebSocket, disconnectWebSocket } from "./broker/client.js";
 import { startGuardian, stopGuardian } from "./guardian.js";
+import { reconcile } from "./reconcile.js";
 import { startPolling, stopPolling, isEnabled as telegramEnabled, sendMessage, notifyScannerReport, notifyManagerReport } from "./telegram.js";
 import { REPO_ROOT } from "./repo-root.js";
 
@@ -176,8 +177,15 @@ function startCronJobs() {
     { timezone: "UTC" }
   );
 
-  _cronTasks = [scannerTask, managerTask, briefingTask];
-  log("cron", `Cycles: scanner ${config.schedule.scannerIntervalMin}m, manager ${config.schedule.managerIntervalMin}m`);
+  // Broker reconciliation — keep local state honest against broker truth
+  const reconcileMin = Math.max(1, config.schedule.reconcileIntervalMin ?? 5);
+  const reconcileTask = nodeCron.schedule(
+    `*/${reconcileMin} * * * *`,
+    () => { reconcile().catch((e) => log("cron_error", `Reconcile failed: ${e.message}`)); }
+  );
+
+  _cronTasks = [scannerTask, managerTask, briefingTask, reconcileTask];
+  log("cron", `Cycles: scanner ${config.schedule.scannerIntervalMin}m, manager ${config.schedule.managerIntervalMin}m, reconcile ${reconcileMin}m`);
 
   // Real-time safety net — runs far more often than the cron cycles
   startGuardian();
@@ -299,6 +307,7 @@ if (isMain && isTTY) {
   busy = true;
   (async () => {
     try {
+      await reconcile().catch((e) => log("startup_error", `Reconcile failed: ${e.message}`));
       const account = await getAccountStatus();
       const positions = await getOpenPositions();
       const state = getStateSummary();
@@ -464,11 +473,15 @@ Schedule:   scan=${cfg.schedule.scannerIntervalMin}m manage=${cfg.schedule.manag
 } else if (isMain) {
   // Non-TTY mode — start cycles immediately
   log("startup", "Non-TTY mode — starting cron cycles");
-  startCronJobs();
-  cronStarted = true;
 
-  // Run scanner once on startup
-  setTimeout(() => {
-    runScannerCycle().catch((e) => log("startup_error", e.message));
-  }, 5000);
+  // Reconcile against the broker before the first cycle, then start.
+  reconcile()
+    .catch((e) => log("startup_error", `Reconcile failed: ${e.message}`))
+    .finally(() => {
+      startCronJobs();
+      cronStarted = true;
+      setTimeout(() => {
+        runScannerCycle().catch((e) => log("startup_error", e.message));
+      }, 5000);
+    });
 }

@@ -11,10 +11,10 @@
  */
 import fetch from "node-fetch";
 import { load } from "cheerio";
-import fs from "fs";
 import { log } from "./logger.js";
 import { config } from "./config.js";
 import { repoPath } from "./repo-root.js";
+import { readJSON, writeJSONAtomic } from "./storage.js";
 
 const FOREX_FACTORY_URL = process.env.FOREX_FACTORY_URL || "https://www.forexfactory.com";
 const FINNHUB_KEY = process.env.FINNHUB_API_KEY || "";
@@ -29,12 +29,11 @@ let _newsCacheAt = 0;
 // ─── News Correlation Store ──────────────────────────────────────
 
 function loadCorrelations() {
-  if (!fs.existsSync(CORRELATION_FILE)) return {};
-  try { return JSON.parse(fs.readFileSync(CORRELATION_FILE, "utf8")); } catch { return {}; }
+  return readJSON(CORRELATION_FILE, {});
 }
 
 function saveCorrelations(data) {
-  fs.writeFileSync(CORRELATION_FILE, JSON.stringify(data, null, 2));
+  writeJSONAtomic(CORRELATION_FILE, data);
 }
 
 /**

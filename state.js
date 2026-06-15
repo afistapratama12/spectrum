@@ -1,42 +1,29 @@
-import fs from "fs";
 import { log } from "./logger.js";
 import { repoPath } from "./repo-root.js";
+import { readJSON, writeJSONAtomic } from "./storage.js";
 
 const STATE_FILE = repoPath("state.json");
 const SNAPSHOT_FILE = repoPath("daily-snapshots.json");
 
 function loadState() {
-  if (!fs.existsSync(STATE_FILE)) {
-    return {
-      trades: {},
-      openTradeIds: [],
-      challenge: { phase: "evaluation", startedAt: new Date().toISOString(), completedAt: null },
-      dailySnapshots: [],
-    };
-  }
-  try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
-  } catch (error) {
-    log("state_warn", `Invalid state.json: ${error.message}`);
-    return { trades: {}, openTradeIds: [], challenge: {}, dailySnapshots: [] };
-  }
+  return readJSON(STATE_FILE, () => ({
+    trades: {},
+    openTradeIds: [],
+    challenge: { phase: "evaluation", startedAt: new Date().toISOString(), completedAt: null },
+    dailySnapshots: [],
+  }));
 }
 
 function saveState(data) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(data, null, 2));
+  writeJSONAtomic(STATE_FILE, data);
 }
 
 function loadSnapshots() {
-  if (!fs.existsSync(SNAPSHOT_FILE)) return [];
-  try {
-    return JSON.parse(fs.readFileSync(SNAPSHOT_FILE, "utf8"));
-  } catch {
-    return [];
-  }
+  return readJSON(SNAPSHOT_FILE, []);
 }
 
 function saveSnapshots(data) {
-  fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(data, null, 2));
+  writeJSONAtomic(SNAPSHOT_FILE, data);
 }
 
 // ─── Trade Tracking ───────────────────────────────────────────────

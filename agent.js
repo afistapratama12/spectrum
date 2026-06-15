@@ -55,6 +55,37 @@ function stripThink(text) {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
 
+/**
+ * Run a chat completion across a chain of models (B5). On a *retryable* failure
+ * (timeout, network, 429, 5xx, or an empty response) it falls back to the next
+ * model and remembers it for the rest of the loop. Non-retryable errors
+ * (400/401/403 — bad request/auth, identical on every model) are thrown
+ * immediately so we don't waste calls.
+ */
+async function chatWithFallback(models, startIdx, params) {
+  let lastErr;
+  for (let i = startIdx; i < models.length; i++) {
+    const model = models[i];
+    try {
+      const response = await client.chat.completions.create({ ...params, model });
+      if (!response.choices?.length) {
+        const e = new Error("API returned no choices");
+        e.retryable = true;
+        throw e;
+      }
+      return { response, usedModel: model, activeIdx: i };
+    } catch (err) {
+      lastErr = err;
+      const status = err.status;
+      const retryable = err.retryable === true || status === 429 || status >= 500 || status == null;
+      if (!retryable) throw err;
+      if (status === 429) await new Promise((r) => setTimeout(r, 15000));
+      log("agent_warn", `Model "${model}" failed (${status ?? err.message}); ${i + 1 < models.length ? `falling back to "${models[i + 1]}"` : "no fallback left"}`);
+    }
+  }
+  throw lastErr;
+}
+
 export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHistory = [], agentType = "GENERAL", model = null, maxOutputTokens = null, options = {}) {
   const { interactive = false } = options;
 
@@ -79,23 +110,28 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
   const firedOnce = new Set();
   let sawToolCall = false;
 
+  // B5: build the model fallback chain (primary first, then configured fallbacks)
+  const primaryModel = model || config.llm[`${agentType.toLowerCase()}Model`] || DEFAULT_MODEL;
+  const fallbacks = Array.isArray(config.llm.fallbackModels) ? config.llm.fallbackModels : [];
+  const modelChain = [primaryModel, ...fallbacks.filter((m) => m && m !== primaryModel)];
+  let activeIdx = 0;
+
+  // Telemetry (used by the eval harness, B6)
+  const toolsUsed = [];
+  let stepsUsed = 0;
+
   for (let step = 0; step < maxSteps; step++) {
-    const usedModel = model || config.llm[`${agentType.toLowerCase()}Model`] || DEFAULT_MODEL;
+    stepsUsed = step + 1;
 
     try {
-      const response = await client.chat.completions.create({
-        model: usedModel,
+      const { response, activeIdx: nextIdx } = await chatWithFallback(modelChain, activeIdx, {
         messages,
         tools: getToolsForRole(agentType),
         temperature: config.llm.temperature,
         max_tokens: maxOutputTokens ?? config.llm.maxTokens,
         tool_choice: "auto",
       });
-
-      if (!response.choices?.length) {
-        log("error", `Bad API response: ${JSON.stringify(response).slice(0, 200)}`);
-        throw new Error("API returned no choices");
-      }
+      activeIdx = nextIdx;
 
       const msg = response.choices[0].message;
 
@@ -136,7 +172,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
           }
         }
 
-        return { content: stripThink(msg.content), userMessage: goal };
+        return { content: stripThink(msg.content), userMessage: goal, toolsUsed, steps: stepsUsed, model: modelChain[activeIdx] };
       }
 
       sawToolCall = true;
@@ -144,6 +180,7 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
       // Execute all tool calls in parallel
       const toolResults = await Promise.all(msg.tool_calls.map(async (tc) => {
         const name = tc.function.name.replace(/<.*$/, "").trim();
+        toolsUsed.push(name);
         let args;
 
         try {
@@ -175,15 +212,13 @@ export async function agentLoop(goal, maxSteps = config.llm.maxSteps, sessionHis
 
       messages.push(...toolResults);
     } catch (error) {
+      // All models in the chain failed (chatWithFallback already handled 429
+      // waits and fallbacks), or a tool step threw.
       log("agent_error", `Step ${step + 1}: ${error.message}`);
-      if (error.status === 429) {
-        await new Promise((r) => setTimeout(r, 15000));
-        continue;
-      }
       if (step === 0) throw error;
-      return { content: `Agent encountered an error after ${step + 1} steps: ${error.message}`, userMessage: goal };
+      return { content: `Agent encountered an error after ${step + 1} steps: ${error.message}`, userMessage: goal, toolsUsed, steps: stepsUsed, error: error.message };
     }
   }
 
-  return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal };
+  return { content: "Max steps reached. Review logs for partial progress.", userMessage: goal, toolsUsed, steps: stepsUsed, maxStepsReached: true };
 }

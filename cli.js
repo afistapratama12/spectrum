@@ -52,6 +52,9 @@ Info:
   decisions [limit]         Recent trade decisions
   briefing                  Generate daily briefing
 
+Eval:
+  eval <model> [runs]       Score a model's reliability (DRY_RUN, default 5 runs)
+
 Flags:
   --dry-run                 Simulate without executing (overrides env)`;
 
@@ -241,6 +244,31 @@ async function main() {
       case "backtests": {
         const result = await executeTool("list_backtests", {});
         printJson(result);
+        break;
+      }
+      case "eval": {
+        const model = args[0];
+        const runs = parseInt(args[1], 10) || 5;
+        if (!model) {
+          console.log("Usage: eval <model> [runs]   e.g. eval deepseek/deepseek-chat 5");
+          return;
+        }
+        const { evalModel } = await import("./eval-model.js");
+        console.log(`Evaluating "${model}" over ${runs} scanner run(s) — DRY_RUN, no live orders...\n`);
+        const report = await evalModel(model, { runs });
+        const s = report.scorecard;
+        console.log(`Model:              ${report.model}`);
+        console.log(`Completion:         ${s.completionRate}%   (ran without error)`);
+        console.log(`Tool-call reliab.:  ${s.toolCallReliability}%   (called ≥1 tool)`);
+        console.log(`Process adherence:  ${s.processAdherence}%   (rules + scan_markets)`);
+        console.log(`Valid decision:     ${s.validDecisionRate}%   (produced a decision)`);
+        console.log(`Action stability:   ${s.actionStability}%   (agreement across runs)`);
+        console.log(`Max-steps hit:      ${s.maxStepsHitRate}%`);
+        console.log(`Avg steps:          ${s.avgSteps}`);
+        console.log(`Avg latency:        ${s.avgDurationMs} ms`);
+        console.log(`Actions:            market ${s.actionDistribution.market} / pending ${s.actionDistribution.pending} / skip ${s.actionDistribution.skip}`);
+        if (s.errors.length) console.log(`Errors:             ${[...new Set(s.errors)].slice(0, 3).join(" | ")}`);
+        console.log();
         break;
       }
       default:

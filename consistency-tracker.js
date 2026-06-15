@@ -8,30 +8,19 @@
  * - Daily P&L contribution per strategy (for consistency rule)
  * - Overall blended consistency score
  */
-import fs from "fs";
 import { repoPath } from "./repo-root.js";
+import { readJSON, writeJSONAtomic } from "./storage.js";
 import { getStrategiesByType, getStrategy } from "./strategies/index.js";
 import { getPerformanceHistory } from "./lessons.js";
 
 const CONSISTENCY_FILE = repoPath("consistency.json");
 
 function load() {
-  if (!fs.existsSync(CONSISTENCY_FILE)) {
-    return {
-      byStrategy: {},
-      dailyContributions: {},
-      rollingStats: {},
-    };
-  }
-  try {
-    return JSON.parse(fs.readFileSync(CONSISTENCY_FILE, "utf8"));
-  } catch {
-    return { byStrategy: {}, dailyContributions: {}, rollingStats: {} };
-  }
+  return readJSON(CONSISTENCY_FILE, () => ({ byStrategy: {}, dailyContributions: {}, rollingStats: {} }));
 }
 
 function save(data) {
-  fs.writeFileSync(CONSISTENCY_FILE, JSON.stringify(data, null, 2));
+  writeJSONAtomic(CONSISTENCY_FILE, data);
 }
 
 // ─── Record trade in consistency tracker ──────────────────────────

@@ -15,6 +15,8 @@ Supports two brokers via a unified adapter layer: **TradeLocker** (OAuth 2.0, ma
 - **Market & pending orders** — places market entries plus **buy stop / sell stop / buy limit / sell limit** pending orders at precise levels. SL/TP use each instrument's real pip size (JPY-aware), never a hardcoded value.
 - **Enforces challenge rules** — hard-coded risk engine tracks daily loss, total drawdown, consistency, consecutive loss cooldowns, and news buffers. The LLM *cannot* override these.
 - **Equity Guardian** — a real-time safety net that polls equity every ~45s and, when the account nears a daily-loss or drawdown limit, closes all positions and halts new entries for the rest of the day. Closes the gap between the slower cron cycles.
+- **Broker reconciliation** — the broker is the source of truth: on startup and every few minutes, untracked broker positions are adopted and phantom local trades are closed, so state survives crashes and manual interventions.
+- **Production-grade reliability** — crash-safe SQLite state store, fill confirmation, stale-data guard, a model fallback chain for 24/7 uptime, a model eval harness, and an automated test suite.
 - **Trading style presets** — pick `scalping`, `intraday`, or `swing` and the agent auto-configures timeframes, risk, trailing, and cycle intervals. Any value you set explicitly still wins.
 - **Learns from performance** — records every closed trade, derives lessons from wins and losses, and injects them into future agent cycles
 - **Forex news integration** — scrapes ForexFactory for high-impact events, blocks trading on affected pairs within configurable buffer windows
@@ -61,6 +63,20 @@ The cron cycles run every few minutes, so a fast move (news spike, gap) could bl
 - The halt is surfaced in `/status` and the 12-hour report, and pushed to Telegram.
 
 This sharply reduces the chance of breaching a limit but cannot eliminate it — slippage and large gaps are physical market limits, not code.
+
+### Reliability & production-grade
+
+| Concern | How it's handled | Where |
+|---|---|---|
+| State integrity | All state in one **SQLite** DB (WAL, built-in `node:sqlite`, zero-dep). Crash-safe, concurrency-safe; legacy JSON files auto-migrated. Falls back to atomic file writes on Node < 22.5. | `storage.js` |
+| Drift from reality | **Broker reconciliation** adopts untracked positions and closes phantoms on startup + every `reconcileIntervalMin`. | `reconcile.js` |
+| Optimistic fills | **Fill confirmation** polls positions after a market order (no blind-retry → no double fill); unconfirmed fills are flagged for reconcile. | `tools/executor.js` |
+| Stale / dead feed | **Stale-data guard** refuses entries when the latest candle is older than `maxCandleAgeMin` or the price is invalid. | `tools/executor.js` |
+| Model outage | **Model fallback chain** — on timeout/rate-limit/5xx the agent fails over to `fallbackModels` and keeps running. | `agent.js` |
+| Picking a model | **Eval harness** scores a model's tool-call reliability before live: `node cli.js eval <model>`. | `eval-model.js` |
+| Regressions | **Automated tests**: `npm test`. | `test/` |
+
+The design rule behind all of this: **the LLM is the brain; code is the gate and execution layer.** See [docs/adr/](docs/adr/) for the full rationale.
 
 **Data sources:**
 - Broker REST API — account status, order execution, positions, OHLCV candles
@@ -212,6 +228,12 @@ node cli.js decisions 10                 # Recent decisions
 node cli.js briefing                     # Full performance report
 ```
 
+**Eval (qualify a model before going live):**
+
+```bash
+node cli.js eval deepseek/deepseek-chat 5   # Score reliability over 5 dry-run runs
+```
+
 ### Non-TTY / PM2
 
 ```bash
@@ -270,6 +292,7 @@ Presets are a starting point — any field you set explicitly elsewhere in `user
 | `trailingDistancePips` | `5` | Pips to trail behind current price |
 | `guardianDailyLossTriggerPct` | `0.9` | Equity Guardian acts at this fraction of the daily-loss budget |
 | `guardianTotalDDTriggerPct` | `0.9` | Equity Guardian acts at this fraction of the max drawdown |
+| `maxCandleAgeMin` | `10` | Block entries if the latest candle is older than this (stale-feed guard) |
 
 ### Strategy
 
@@ -289,6 +312,7 @@ Presets are a starting point — any field you set explicitly elsewhere in `user
 | `managerIntervalMin` | `10` | Manager cycle frequency |
 | `reportIntervalHours` | `12` | Hours between full reports (pushed to Telegram) |
 | `guardianIntervalSec` | `45` | Equity Guardian polling interval |
+| `reconcileIntervalMin` | `5` | Broker reconciliation frequency |
 
 ### Models
 
@@ -297,6 +321,7 @@ Presets are a starting point — any field you set explicitly elsewhere in `user
 | `scannerModel` | `openrouter/healer-alpha` | LLM for scanner cycles |
 | `managerModel` | `openrouter/healer-alpha` | LLM for manager cycles |
 | `generalModel` | `openrouter/healer-alpha` | LLM for chat/REPL |
+| `fallbackModels` | `[]` | Models tried in order if the primary times out / rate-limits / errors |
 | `temperature` | `0.3` | LLM temperature |
 | `maxSteps` | `15` | Maximum ReAct loop iterations |
 
@@ -369,11 +394,14 @@ logger.js             Structured logging with action audit trail
 risk-manager.js       Hard risk enforcement (daily loss, drawdown, consistency)
 guardian.js           Equity Guardian — real-time equity watcher + day halt
 trading-halt.js       Day-scoped halt flag shared by guardian + executor
+reconcile.js          Broker reconciliation — adopt/close vs broker truth
+storage.js            SQLite-backed state persistence (readJSON/writeJSONAtomic)
 state.js              Trade registry, daily snapshots, challenge phase state
 news.js               ForexFactory scraper + economic calendar API fallback
 lessons.js            Learning engine: performance records, lesson derivation
 decision-log.js       Decision log for entries, exits, skips
 briefing.js           12-hour performance report generator
+eval-model.js         Model evaluation harness (reliability scorecard)
 indicators.js         Shared pure-math indicators (ATR, EMA, RSI, trend)
 cli.js                Direct CLI — all tools as subcommands with JSON output
 
@@ -466,6 +494,28 @@ LLM_MODEL=your-local-model-name
 ```
 
 Any OpenAI-compatible endpoint works. Recommended: set `temperature: 0.3` in `user-config.json` for consistent trading decisions.
+
+---
+
+## Testing
+
+```bash
+npm test
+```
+
+Runs the built-in `node:test` suite (zero dependency) against an isolated SQLite
+DB in `DRY_RUN` — it never places live orders. It covers the safety-critical
+gates: risk rules, position sizing, JPY pip math, the Equity Guardian halt, broker
+reconciliation, news-payload normalization, and the storage layer. Treat a failing
+`npm test` as a release blocker.
+
+---
+
+## Architecture decisions (ADR)
+
+The *why* behind the system — the LLM-as-brain/code-as-gate principle, the Equity
+Guardian, SQLite state, broker reconciliation, the model fallback chain, and more —
+is recorded in [docs/adr/](docs/adr/). Read it before making structural changes.
 
 ---
 

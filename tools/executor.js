@@ -16,6 +16,7 @@ import { runBacktest, listBacktestResults } from "../backtest/engine.js";
 import { isTradingHalted, getHaltReason } from "../trading-halt.js";
 import fs from "fs";
 import { repoPath } from "../repo-root.js";
+import { writeJSONAtomic } from "../storage.js";
 
 const USER_CONFIG_PATH = repoPath("user-config.json");
 
@@ -55,6 +56,45 @@ async function getSymbolPrecision(symbol) {
 
 function roundToDigits(price, digits) {
   return Number(Number(price).toFixed(digits));
+}
+
+// ─── Data freshness guard (B4) ────────────────────────────────────
+// Never trade on stale or invalid prices — a dead feed, weekend, or gap can
+// otherwise produce entries off a price that no longer exists.
+function checkDataFreshness(candles) {
+  if (!Array.isArray(candles) || candles.length === 0) {
+    return { stale: true, reason: "no candle data available" };
+  }
+  const last = candles[candles.length - 1];
+  if (!(Number(last.close) > 0)) {
+    return { stale: true, reason: `invalid last price (${last.close})` };
+  }
+  const maxAgeMin = config.risk.maxCandleAgeMin ?? 10;
+  if (last.time) {
+    const ageMin = (Date.now() - new Date(last.time).getTime()) / 60000;
+    if (ageMin > maxAgeMin) {
+      return { stale: true, reason: `stale market data — last candle ${ageMin.toFixed(1)}m old (max ${maxAgeMin}m)`, ageMin };
+    }
+  }
+  return { stale: false };
+}
+
+// ─── Fill confirmation (B3) ───────────────────────────────────────
+// The broker's order response is optimistic; poll positions to confirm the
+// fill actually landed. We never blind-retry the order (that risks a double
+// fill) — an unconfirmed fill is flagged and left for reconcile to verify.
+async function confirmFill(ticket, { attempts = 3, delayMs = 1000 } = {}) {
+  const id = String(ticket);
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const positions = await getOpenPositions();
+      if (positions.some((p) => String(p.id ?? p.ticket) === id)) return true;
+    } catch {
+      // transient — retry
+    }
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return false;
 }
 
 // ─── Tool Implementations ─────────────────────────────────────────
@@ -331,6 +371,13 @@ const toolMap = {
     if (candles.length === 0) {
       return { success: false, error: `No price data available for ${symbol}` };
     }
+    // B4: refuse to trade on stale/invalid data (live only; dry-run uses synthetic candles)
+    if (process.env.DRY_RUN !== "true") {
+      const freshness = checkDataFreshness(candles);
+      if (freshness.stale) {
+        return { success: false, blocked: true, reason: `Trade blocked — ${freshness.reason}` };
+      }
+    }
     const currentPrice = candles[candles.length - 1].close;
 
     const { pipSize, digits } = await getSymbolPrecision(symbol);
@@ -356,8 +403,13 @@ const toolMap = {
       return result;
     }
 
-    // 6. Track in state
+    // 6. Confirm the fill landed (B3), then track in state
+    let confirmed = null;
     if (!result.dry_run && result.ticket) {
+      confirmed = await confirmFill(result.ticket);
+      if (!confirmed) {
+        log("executor_warn", `Fill not confirmed for ${result.ticket} — reconcile will verify`);
+      }
       trackTrade({
         ticket: result.ticket,
         symbol,
@@ -388,6 +440,7 @@ const toolMap = {
       ...result,
       risk: sizeCheck,
       currentPrice,
+      confirmed,
       slPrice: roundToDigits(slPrice, digits),
       tpPrice: roundToDigits(tpPrice, digits),
     };
@@ -423,6 +476,12 @@ const toolMap = {
     const candles = await getOHLCV({ symbol, resolution: "5m", count: 5 });
     if (candles.length === 0) {
       return { success: false, error: `No price data available for ${symbol}` };
+    }
+    if (process.env.DRY_RUN !== "true") {
+      const freshness = checkDataFreshness(candles);
+      if (freshness.stale) {
+        return { success: false, blocked: true, reason: `Pending order blocked — ${freshness.reason}` };
+      }
     }
     const currentPrice = candles[candles.length - 1].close;
     const dirOk =
@@ -631,7 +690,7 @@ const toolMap = {
     for (const [key, val] of Object.entries(applied)) {
       userConfig[key] = val;
     }
-    fs.writeFileSync(USER_CONFIG_PATH, JSON.stringify(userConfig, null, 2));
+    writeJSONAtomic(USER_CONFIG_PATH, userConfig);
 
     log("config", `Config updated: ${JSON.stringify(applied)} — ${reason}`);
     return { success: true, applied, unknown, reason };
